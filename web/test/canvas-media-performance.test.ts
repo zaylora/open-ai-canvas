@@ -57,7 +57,8 @@ describe("large canvas media rendering", () => {
     test("does not eagerly load or resize LibTV thumbnails", () => {
         expect(canvasNodeContentSource).toContain('loading="lazy"');
         expect(canvasNodeContentSource).not.toContain('importedFromLibTV ? "eager"');
-        expect(canvasNodeContentSource).toContain("if (importedFromLibTV) return;");
+        // 变体地址本身已是缩小后的图，和 LibTV 导入一样不该再触发节点 resize。
+        expect(canvasNodeContentSource).toContain("if (importedFromLibTV || usingVariant) return;");
     });
 
     test("keeps canvas node action context stable across viewport renders", () => {

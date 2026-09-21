@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { Button, Switch, Tooltip } from "antd";
 import { Film, Image as ImageIcon, LoaderCircle, Minus, Play, Plus, Rows3, Trash2, Upload } from "lucide-react";
 
+import { CANVAS_THUMBNAIL_VARIANT_WIDTH } from "@/lib/canvas/image-variant";
 import { CachedResourceImage } from "@/components/cached-resource-image";
 import { CanvasResourceMentionTextarea } from "@/components/canvas/canvas-resource-mention-textarea";
 import {
@@ -400,7 +401,7 @@ function ReferenceThumbnail({ node, label, theme, readOnly, rowId, columnIndex, 
                     if (file && !readOnly) onUploadFile(file);
                 }}
             >
-                {filled ? <CachedResourceImage eager src={node.metadata?.previewContent || node.metadata?.content} storageKey={node.metadata?.storageKey} alt={node.title || "参考图"} className="block size-full max-h-full max-w-full object-cover" fallback={fallback} /> : fallback}
+                {filled ? <CachedResourceImage eager src={node.metadata?.previewContent || node.metadata?.content} storageKey={node.metadata?.storageKey} alt={node.title || "参考图"} className="block size-full max-h-full max-w-full object-cover" fallback={fallback} variantWidth={CANVAS_THUMBNAIL_VARIANT_WIDTH} /> : fallback}
                 <span className="absolute bottom-1 left-1 rounded px-1 py-0.5 text-[8px] font-medium text-white" style={{ background: "rgba(0,0,0,.58)" }}>{label}</span>
             </button>
         </Tooltip>
@@ -424,7 +425,7 @@ function ResultThumbnail({ output, status, theme, onFocus }: { output?: CanvasNo
                     if (output) onFocus();
                 }}
             >
-                {filled && output ? <CachedResourceImage eager src={output.metadata?.previewContent || output.metadata?.content} storageKey={output.metadata?.storageKey} alt="生成结果" className="block size-full max-h-full max-w-full object-cover" fallback={<EmptyThumbnail theme={theme} compact />} /> : <EmptyThumbnail theme={theme} compact />}
+                {filled && output ? <CachedResourceImage eager src={output.metadata?.previewContent || output.metadata?.content} storageKey={output.metadata?.storageKey} alt="生成结果" className="block size-full max-h-full max-w-full object-cover" fallback={<EmptyThumbnail theme={theme} compact />} variantWidth={CANVAS_THUMBNAIL_VARIANT_WIDTH} /> : <EmptyThumbnail theme={theme} compact />}
                 {status.loading ? <span className="absolute inset-0 grid place-items-center bg-black/35"><LoaderCircle className="size-4 animate-spin" style={{ color: tone }} /></span> : null}
                 <span className="absolute right-1 top-1 size-2 rounded-full" style={{ background: tone }} />
             </button>

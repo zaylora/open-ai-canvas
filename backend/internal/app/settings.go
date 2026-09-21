@@ -48,6 +48,7 @@ type OSSSettingRequest struct {
 	PathStyle       bool   `json:"pathStyle"`
 	SessionToken    string `json:"sessionToken"`
 	AllowUserS3     bool   `json:"allowUserS3"`
+	ImageTransform  bool   `json:"imageTransform"`
 }
 
 type PublicOSSSetting struct {
@@ -70,6 +71,7 @@ type PublicOSSSetting struct {
 	HistoryCount            int64      `json:"historyCount"`
 	ReferencedResourceCount int64      `json:"referencedResourceCount"`
 	AllowUserS3             bool       `json:"allowUserS3"`
+	ImageTransform          bool       `json:"imageTransform"`
 	UpdatedBy               string     `json:"updatedBy"`
 	CreatedAt               time.Time  `json:"createdAt"`
 	UpdatedAt               time.Time  `json:"updatedAt"`
@@ -91,6 +93,9 @@ type ossSettingValue struct {
 	SessionToken      string `json:"sessionToken"`
 	StorageLocationID string `json:"storageLocationId"`
 	AllowUserS3       bool   `json:"allowUserS3"`
+	// ImageTransform 开启浏览器读取图片时的缩放变体交付，当前只由 Cloudflare Images 实现，
+	// 因此仅在 R2 + Cloudflare 代理域名下成立；normalizeOSSSetting 负责强制这个前提。
+	ImageTransform bool `json:"imageTransform"`
 	// 平台切换云厂商后仍需读取历史资源，因此仅归档非当前厂商的访问密钥。
 	ArchivedCredentials map[string]ossProviderCredentials `json:"archivedCredentials,omitempty"`
 }
@@ -563,6 +568,7 @@ func ossSettingFromRequest(req OSSSettingRequest, current ossSettingValue) (ossS
 		PathStyle:       req.PathStyle,
 		SessionToken:    strings.TrimSpace(req.SessionToken),
 		AllowUserS3:     req.AllowUserS3,
+		ImageTransform:  req.ImageTransform,
 	})
 	if next.Provider != aliyunOSSProvider && next.Provider != tencentCOSProvider && next.Provider != qiniuKodoProvider && next.Provider != s3Provider {
 		return next, BadAuthRequest("仅支持阿里云 OSS、腾讯云 COS、七牛云 Kodo 和通用 S3")
@@ -680,7 +686,18 @@ func normalizeOSSSetting(value ossSettingValue) ossSettingValue {
 	value.SessionToken = strings.TrimSpace(value.SessionToken)
 	value.StorageLocationID = strings.TrimSpace(value.StorageLocationID)
 	value.ArchivedCredentials = cloneOSSProviderCredentials(value.ArchivedCredentials)
+	// 图片变体依赖 Cloudflare 代理域名上的 /cdn-cgi/image 路径，换成别的厂商或去掉 CDN 域名后
+	// 同样的地址会直接 404。这里统一清零，保证任何写入路径都不会留下无效开关。
+	if !supportsImageTransform(value) {
+		value.ImageTransform = false
+	}
 	return value
+}
+
+// supportsImageTransform 判定当前存储配置能否交付图片变体。
+// 前端 web/src/lib/oss-settings.ts 的同名函数必须与这里保持一致。
+func supportsImageTransform(value ossSettingValue) bool {
+	return value.Provider == s3Provider && value.S3Preset == "r2" && value.CDNBaseURL != ""
 }
 
 func defaultOSSSetting() ossSettingValue {
@@ -704,6 +721,7 @@ func (s *Service) publicOSSSetting(setting *model.SystemSetting, value ossSettin
 		HasSessionToken:    value.SessionToken != "",
 		StorageLocationID:  value.StorageLocationID,
 		AllowUserS3:        value.AllowUserS3,
+		ImageTransform:     value.ImageTransform,
 	}
 	if setting != nil {
 		result.UpdatedBy = setting.UpdatedBy
@@ -733,6 +751,7 @@ func (s *Service) publicUserOSSSetting(setting *model.UserOSSSetting, value ossS
 		HasSessionToken:    value.SessionToken != "",
 		StorageLocationID:  value.StorageLocationID,
 		AllowUserS3:        allowUserS3,
+		ImageTransform:     value.ImageTransform,
 	}
 	if value.Provider == s3Provider && !allowUserS3 {
 		result.Enabled = false

@@ -541,7 +541,6 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
                         value={prompt}
                         references={textareaReferences}
                         onSelectReference={onAddReference ? (reference) => onAddReference(node.id, reference) : undefined}
-                        includeAssetLibrary
                         onChange={updatePrompt}
                         autoLinkEnabled={autoLinkEnabled}
                         onReferenceFilesDrop={onReplaceReferenceFiles ? (reference, files) => onReplaceReferenceFiles(node.id, reference, files) : undefined}

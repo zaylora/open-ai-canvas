@@ -18,6 +18,8 @@ type ResourceStream struct {
 type ResourceDeliveryOptions struct {
 	ForceDirect bool
 	ForceProxy  bool
+	// ImageWidth 大于 0 时请求该宽度的图片变体；存储配置不支持变体时静默回退原图。
+	ImageWidth int
 }
 
 type ResourceDelivery struct {

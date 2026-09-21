@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { buildNodeGenerationInputs, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import { isFrameNode } from "@/lib/canvas/canvas-frame";
 import { sameNodeSemanticData } from "@/lib/canvas/canvas-project-domain";
-import { canvasNodeRenderBudget, canvasNodeRenderPadding, CANVAS_MAX_RENDERED_CONNECTIONS, shouldReduceCanvasMediaEffects } from "@/lib/canvas/canvas-performance-mode";
+import { canvasNodeRenderBudget, canvasNodeRenderPadding, CANVAS_MAX_RENDERED_CONNECTIONS, shouldReduceCanvasMediaEffects, shouldVirtualizeCanvasNodes } from "@/lib/canvas/canvas-performance-mode";
 import { buildCanvasNodeMentionReferenceMap, buildCanvasResourceReferences, buildToolMentionReference, parseToolMentionTokens } from "@/lib/canvas/canvas-resource-references";
 import { buildSkillMentionReferences } from "@/lib/canvas/canvas-skill-mentions";
 import { buildCanvasSpatialIndex, canvasNodeBounds, type CanvasSpatialIndex, type CanvasSpatialIndexEntry } from "@/lib/canvas/canvas-spatial-index";
@@ -46,6 +46,12 @@ type UseCanvasRenderModelOptions = {
     dialogNodeId: string | null;
 };
 
+/** 关闭视口裁剪时使用的恒定边界，引用稳定以免触发下游 useMemo 重算。 */
+const INFINITE_RENDER_BOUNDS = {
+    enter: { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity },
+    retain: { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity },
+} as const;
+
 export function useCanvasRenderModel({
     nodes,
     connections,
@@ -78,6 +84,7 @@ export function useCanvasRenderModel({
     dialogNodeId,
 }: UseCanvasRenderModelOptions) {
     const reduceMediaEffects = useMemo(() => shouldReduceCanvasMediaEffects(mediaPerformanceMode, nodes), [mediaPerformanceMode, nodes]);
+    const virtualizeNodes = useMemo(() => shouldVirtualizeCanvasNodes(mediaPerformanceMode, nodes), [mediaPerformanceMode, nodes]);
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
     // These maps are consumed by both virtualization and node chrome. Building
     // them together keeps a metadata update from walking a 50k-node array six
@@ -147,6 +154,9 @@ export function useCanvasRenderModel({
         return { left, top, width: Math.max(2, width), height: Math.max(2, height) };
     }, [reduceMediaEffects, viewport.k, viewport.x, viewport.y, viewportSize.height, viewportSize.width]);
     const renderBounds = useMemo(() => {
+        // 关闭裁剪时返回与 viewport 无关的恒定边界：否则 visibleNodes 和 displayConnections
+        // 仍会因为 renderBounds 每帧变化而重算，节点集合没变也要重新遍历所有连线。
+        if (!virtualizeNodes) return INFINITE_RENDER_BOUNDS;
         const enterPadding = canvasNodeRenderPadding(reduceMediaEffects, false) / viewport.k;
         const retainPadding = canvasNodeRenderPadding(reduceMediaEffects, true) / viewport.k;
         const viewLeft = -viewport.x / viewport.k;
@@ -157,7 +167,7 @@ export function useCanvasRenderModel({
             enter: { left: viewLeft - enterPadding, top: viewTop - enterPadding, right: viewLeft + viewWidth + enterPadding, bottom: viewTop + viewHeight + enterPadding },
             retain: { left: viewLeft - retainPadding, top: viewTop - retainPadding, right: viewLeft + viewWidth + retainPadding, bottom: viewTop + viewHeight + retainPadding },
         };
-    }, [reduceMediaEffects, viewport.k, viewport.x, viewport.y, viewportSize.height, viewportSize.width]);
+    }, [reduceMediaEffects, viewport.k, viewport.x, viewport.y, viewportSize.height, viewportSize.width, virtualizeNodes]);
     const nodeSpatialIndexRef = useRef<{ source: CanvasNodeData[]; index: CanvasSpatialIndex<string> } | null>(null);
     const nodeSpatialIndex = useMemo(() => {
         const previous = nodeSpatialIndexRef.current;
@@ -177,6 +187,14 @@ export function useCanvasRenderModel({
     const visibleNodes = useMemo(() => {
         const frames: CanvasNodeData[] = [];
         const regular: CanvasNodeData[] = [];
+        // 关闭裁剪时不看 viewport，节点集合只随画布数据变化，平移缩放不再重挂组件。
+        if (!virtualizeNodes) {
+            nodes.forEach((node) => {
+                if (renderHiddenNodeIds.has(node.id)) return;
+                (isFrameNode(node) ? frames : regular).push(node);
+            });
+            return [...frames, ...regular];
+        }
         const renderedNodeIds = renderedNodeIdsRef.current;
         const renderBudget = canvasNodeRenderBudget(viewport.k);
         const forcedNodeIds = new Set([...selectedNodeIds, ...(dragPreview?.nodeIds || [])].slice(0, renderBudget));
@@ -200,7 +218,7 @@ export function useCanvasRenderModel({
             (isFrameNode(node) ? frames : regular).push(node);
         });
         return [...frames, ...regular];
-    }, [dragPreview, nodeById, nodeSpatialIndex, renderBounds, renderHiddenNodeIds, selectedNodeIds]);
+    }, [dragPreview, nodeById, nodeSpatialIndex, nodes, renderBounds, renderHiddenNodeIds, selectedNodeIds, virtualizeNodes]);
     useEffect(() => {
         renderedNodeIdsRef.current = new Set(visibleNodes.map((node) => node.id));
     }, [visibleNodes]);
@@ -302,7 +320,11 @@ export function useCanvasRenderModel({
     }, [collapsedBatchChildIds, connections, nodeById]);
     const displayConnections = useMemo(() => {
         const candidateById = new Map<string, CanvasDisplayConnection>();
-        connectionSpatialIndex.index.query(renderBounds.retain, CANVAS_MAX_RENDERED_CONNECTIONS).forEach((display) => candidateById.set(display.connection.id, display));
+        if (virtualizeNodes) {
+            connectionSpatialIndex.index.query(renderBounds.retain, CANVAS_MAX_RENDERED_CONNECTIONS).forEach((display) => candidateById.set(display.connection.id, display));
+        } else {
+            connectionSpatialIndex.entriesById.forEach((display, connectionId) => candidateById.set(connectionId, display));
+        }
         dragPreview?.nodeIds.forEach((nodeId) => {
             connectionSpatialIndex.connectionIdsByNodeId.get(nodeId)?.forEach((connectionId) => {
                 const display = connectionSpatialIndex.entriesById.get(connectionId);
@@ -316,10 +338,10 @@ export function useCanvasRenderModel({
             const connectionTop = Math.min(from.position.y, to.position.y);
             const connectionRight = Math.max(from.position.x + from.width, to.position.x + to.width);
             const connectionBottom = Math.max(from.position.y + from.height, to.position.y + to.height);
-            if (connectionRight <= renderBounds.retain.left || connectionLeft >= renderBounds.retain.right || connectionBottom <= renderBounds.retain.top || connectionTop >= renderBounds.retain.bottom) return [];
+            if (virtualizeNodes && (connectionRight <= renderBounds.retain.left || connectionLeft >= renderBounds.retain.right || connectionBottom <= renderBounds.retain.top || connectionTop >= renderBounds.retain.bottom)) return [];
             return [{ connection, from, to }];
         });
-    }, [connectionSpatialIndex, dragPreview, renderBounds]);
+    }, [connectionSpatialIndex, dragPreview, renderBounds, virtualizeNodes]);
 
     const configInputsById = useMemo(() => {
         const map = new Map<string, NodeGenerationInput[]>();

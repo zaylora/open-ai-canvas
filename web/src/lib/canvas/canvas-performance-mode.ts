@@ -32,6 +32,26 @@ export function shouldReduceCanvasMediaEffects(mode: CanvasMediaPerformanceMode,
     return nodes.length >= 80 || mediaCount >= 32;
 }
 
+/**
+ * 超过这个节点数才按视口裁剪 DOM。
+ * 裁剪范围跟着 viewport 变化，平移和缩放时节点会不断进出渲染集合，React 因此反复
+ * 卸载重挂节点与连线——图片要重新解码，动画和播放状态也会被打断。节点不多时这点
+ * DOM 成本远低于重建成本，所以小画布直接全量渲染。
+ * 阈值刻意远低于 CANVAS_MAX_RENDERED_NODES：预算是渲染上限，这里是「值得裁剪」的下限。
+ */
+const CANVAS_VIRTUALIZE_NODE_THRESHOLD = 240;
+
+/**
+ * 是否按视口裁剪节点和连线。
+ * quality 模式完全关闭裁剪（用户明确选择画面稳定优先），performance 模式始终裁剪，
+ * auto 只在节点数超过阈值时裁剪。
+ */
+export function shouldVirtualizeCanvasNodes(mode: CanvasMediaPerformanceMode, nodes: CanvasNodeData[]) {
+    if (mode === "quality") return false;
+    if (mode === "performance") return true;
+    return nodes.length > CANVAS_VIRTUALIZE_NODE_THRESHOLD;
+}
+
 export function canvasNodeRenderPadding(reduceMediaEffects: boolean, previouslyRendered: boolean) {
     if (previouslyRendered) return reduceMediaEffects ? 640 : 384;
     return reduceMediaEffects ? 128 : 192;

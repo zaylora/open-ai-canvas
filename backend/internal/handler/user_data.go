@@ -289,6 +289,7 @@ func RegisterUserDataRoutes(r *gin.RouterGroup, svc *service.Service) {
 		delivery, err := svc.PrepareResourceDelivery(user.ID, c.Param("id"), service.ResourceDeliveryOptions{
 			ForceDirect: c.Query("direct") == "1",
 			ForceProxy:  c.Query("proxy") == "1",
+			ImageWidth:  resourceVariantWidth(c),
 		})
 		if err != nil {
 			failService(c, err)
@@ -755,6 +756,19 @@ func hasUserAssetPageFilters(c *gin.Context) bool {
 		}
 	}
 	return false
+}
+
+// resourceVariantWidth 解析图片变体请求宽度。只认 variant=preview，避免与视频的
+// variant=playback 混用；宽度由 service 层向上取整到固定档位，非法值按不请求变体处理。
+func resourceVariantWidth(c *gin.Context) int {
+	if c.Query("variant") != "preview" {
+		return 0
+	}
+	width, err := strconv.Atoi(c.Query("w"))
+	if err != nil || width <= 0 {
+		return 0
+	}
+	return width
 }
 
 func resourceResponseETag(resource *model.Resource) string {

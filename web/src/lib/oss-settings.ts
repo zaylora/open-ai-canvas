@@ -65,6 +65,15 @@ const S3_PRESET_HINTS: Record<S3Preset, { region: string; endpoint: string; help
 
 const CONNECTION_FIELDS = new Set(["provider", "s3Preset", "region", "endpoint", "cdnBaseUrl", "bucket", "accessKeyId", "accessKeySecret", "sessionToken", "pathPrefix", "pathStyle"]);
 
+/**
+ * 判定当前存储配置能否交付图片变体。变体由 Cloudflare Images 的 /cdn-cgi/image 实现，
+ * 只有 R2 + 接入 Cloudflare 的自定义域名才成立；其他厂商换成同样的地址会直接 404。
+ * 后端 backend/internal/app/settings.go 的同名函数必须与这里保持一致。
+ */
+export function supportsImageTransform(input: { provider?: OSSProvider | string; s3Preset?: S3Preset | string; cdnBaseUrl?: string }) {
+    return input.provider === "s3" && input.s3Preset === "r2" && Boolean((input.cdnBaseUrl || "").trim());
+}
+
 export function getS3PresetHints(preset?: S3Preset) {
     return S3_PRESET_HINTS[preset || "custom"];
 }

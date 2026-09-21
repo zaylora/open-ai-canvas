@@ -1,0 +1,410 @@
+{
+  "apiVersion": "yingce.plugin/v2",
+  "id": "xinhankr-wan-video",
+  "name": "Xinhankr Wan Video",
+  "version": "1.0.0",
+  "author": "Xinhankr / 影策",
+  "description": "Xinhankr 可美视频 AI 的万相视频 OpenAI 兼容协议插件。",
+  "permissions": [
+    "generation.run",
+    "media.read"
+  ],
+  "configuration": {
+    "fields": [
+      {
+        "name": "apiKey",
+        "type": "secret",
+        "label": "Xinhankr API Token",
+        "required": true,
+        "description": "可美视频 AI 控制台生成的 API Token。"
+      }
+    ]
+  },
+  "contributes": {
+    "providers": [
+      {
+        "id": "xinhankr-wan-video",
+        "label": "Xinhankr Wan Video",
+        "capabilities": [
+          "video"
+        ],
+        "scopes": [
+          "admin.system-channel",
+          "user.custom-channel",
+          "canvas",
+          "creation",
+          "agent"
+        ],
+        "baseUrl": "https://token.xinhankr.com",
+        "requiresPublicMediaUrls": true,
+        "auth": {
+          "type": "bearer",
+          "field": "apiKey"
+        },
+        "parameters": [
+          {
+            "name": "model",
+            "type": "string",
+            "required": true,
+            "mapping": "model",
+            "description": "视频模型 ID；文档示例使用 wan3.0-video。"
+          },
+          {
+            "name": "prompt",
+            "type": "string",
+            "required": true,
+            "mapping": "prompt",
+            "description": "视频文本提示词。"
+          },
+          {
+            "name": "images",
+            "type": "media[]",
+            "required": false,
+            "mapping": "images",
+            "description": "图片输入；支持首帧、尾帧和参考图角色。"
+          },
+          {
+            "name": "videos",
+            "type": "media[]",
+            "required": false,
+            "mapping": "videos",
+            "description": "参考视频；默认角色为 reference_video。"
+          },
+          {
+            "name": "audios",
+            "type": "media[]",
+            "required": false,
+            "mapping": "audios",
+            "description": "参考音频；默认角色为 reference_audio，不能作为唯一参考素材。"
+          },
+          {
+            "name": "duration",
+            "type": "integer",
+            "required": false,
+            "mapping": "duration",
+            "description": "视频时长，单位为秒，默认 5。"
+          },
+          {
+            "name": "aspectRatio",
+            "type": "string",
+            "required": false,
+            "mapping": "ratio",
+            "description": "画幅比例，例如 16:9、9:16、1:1。"
+          },
+          {
+            "name": "resolution",
+            "type": "string",
+            "required": false,
+            "mapping": "resolution/size",
+            "description": "分辨率档位，例如 720P、1080P。"
+          },
+          {
+            "name": "providerOptions",
+            "type": "object",
+            "required": false,
+            "mapping": "files/links/size/ratio",
+            "description": "Xinhankr 专用扩展；支持 files、links、size、ratio。"
+          }
+        ],
+        "create": {
+          "method": "POST",
+          "path": "/v1/video/generations",
+          "contentType": "application/json",
+          "body": {
+            "model": {
+              "$ref": "request.model"
+            },
+            "prompt": {
+              "$ref": "request.prompt"
+            },
+            "images": {
+              "$omitEmpty": {
+                "$map": {
+                  "from": {
+                    "$sortByOrder": {
+                      "$ref": "request.images"
+                    }
+                  },
+                  "as": "media",
+                  "in": {
+                    "url": {
+                      "$ref": "media.value"
+                    },
+                    "role": {
+                      "$coalesce": [
+                        {
+                          "$ref": "media.role"
+                        },
+                        {
+                          "$switch": {
+                            "cases": [
+                              {
+                                "when": {
+                                  "$eq": [
+                                    {
+                                      "$len": {
+                                        "$ref": "request.images"
+                                      }
+                                    },
+                                    1
+                                  ]
+                                },
+                                "then": "first_frame"
+                              },
+                              {
+                                "when": {
+                                  "$eq": [
+                                    {
+                                      "$len": {
+                                        "$ref": "request.images"
+                                      }
+                                    },
+                                    2
+                                  ]
+                                },
+                                "then": {
+                                  "$if": {
+                                    "condition": {
+                                      "$eq": [
+                                        {
+                                          "$ref": "mediaIndex"
+                                        },
+                                        0
+                                      ]
+                                    },
+                                    "then": "first_frame",
+                                    "else": "last_frame"
+                                  }
+                                }
+                              }
+                            ],
+                            "default": "reference_image"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "videos": {
+              "$omitEmpty": {
+                "$map": {
+                  "from": {
+                    "$sortByOrder": {
+                      "$ref": "request.videos"
+                    }
+                  },
+                  "as": "media",
+                  "in": {
+                    "url": {
+                      "$ref": "media.value"
+                    },
+                    "role": {
+                      "$coalesce": [
+                        {
+                          "$ref": "media.role"
+                        },
+                        "reference_video"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "audios": {
+              "$omitEmpty": {
+                "$map": {
+                  "from": {
+                    "$sortByOrder": {
+                      "$ref": "request.audios"
+                    }
+                  },
+                  "as": "media",
+                  "in": {
+                    "url": {
+                      "$ref": "media.value"
+                    },
+                    "role": {
+                      "$coalesce": [
+                        {
+                          "$ref": "media.role"
+                        },
+                        "reference_audio"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "files": {
+              "$omitEmpty": {
+                "$ref": "request.providerOptions.xinhankr-wan-video.files"
+              }
+            },
+            "links": {
+              "$omitEmpty": {
+                "$ref": "request.providerOptions.xinhankr-wan-video.links"
+              }
+            },
+            "resolution": {
+              "$omitEmpty": {
+                "$upper": {
+                  "$coalesce": [
+                    {
+                      "$ref": "request.providerOptions.xinhankr-wan-video.size"
+                    },
+                    {
+                      "$ref": "request.resolution"
+                    }
+                  ]
+                }
+              }
+            },
+            "ratio": {
+              "$omitEmpty": {
+                "$coalesce": [
+                  {
+                    "$ref": "request.providerOptions.xinhankr-wan-video.ratio"
+                  },
+                  {
+                    "$ref": "request.aspectRatio"
+                  }
+                ]
+              }
+            },
+            "duration": {
+              "$coalesce": [
+                {
+                  "$ref": "request.duration"
+                },
+                5
+              ]
+            }
+          }
+        },
+        "poll": {
+          "method": "GET",
+          "path": "/v1/video/generations/{{taskId}}",
+          "contentType": "application/json"
+        },
+        "response": {
+          "taskIdPaths": [
+            "data.task_id",
+            "data.taskId",
+            "task_id",
+            "taskId",
+            "data.id",
+            "id"
+          ],
+          "statusPaths": [
+            "status",
+            "state",
+            "data.status"
+          ],
+          "messagePaths": [
+            "error.message",
+            "message",
+            "fail_reason",
+            "data.message"
+          ],
+          "errorPaths": [
+            "error.code",
+            "code"
+          ],
+          "resultPaths": [
+            "data"
+          ],
+          "resultKind": "video",
+          "resultEphemeral": true
+        }
+      }
+    ],
+    "workflows": [
+      {
+        "id": "xinhankr-wan-video-generate",
+        "label": "Xinhankr 万相视频生成",
+        "providerId": "xinhankr-wan-video",
+        "capability": "video",
+        "parameters": [
+          {
+            "name": "model",
+            "type": "string",
+            "required": true,
+            "description": "模型 ID，默认示例为 wan3.0-video。"
+          },
+          {
+            "name": "prompt",
+            "type": "string",
+            "required": true,
+            "description": "视频提示词。"
+          },
+          {
+            "name": "images",
+            "type": "media[]",
+            "required": false,
+            "description": "首帧、首尾帧或多图参考。"
+          },
+          {
+            "name": "videos",
+            "type": "media[]",
+            "required": false,
+            "description": "参考视频。"
+          },
+          {
+            "name": "audios",
+            "type": "media[]",
+            "required": false,
+            "description": "参考音频。"
+          },
+          {
+            "name": "duration",
+            "type": "integer",
+            "required": false,
+            "description": "时长秒数。"
+          },
+          {
+            "name": "resolution",
+            "type": "string",
+            "required": false,
+            "values": [
+              "720P",
+              "1080P"
+            ],
+            "description": "分辨率。"
+          },
+          {
+            "name": "ratio",
+            "type": "string",
+            "required": false,
+            "values": [
+              "16:9",
+              "9:16",
+              "1:1"
+            ],
+            "description": "画幅比例。"
+          },
+          {
+            "name": "files",
+            "type": "array",
+            "required": false,
+            "description": "参考文件 URL；通过 providerOptions.xinhankr-wan-video.files 传递。"
+          },
+          {
+            "name": "links",
+            "type": "array",
+            "required": false,
+            "description": "参考网页 URL；通过 providerOptions.xinhankr-wan-video.links 传递。"
+          }
+        ],
+        "defaults": {
+          "model": "wan3.0-video",
+          "duration": 5,
+          "resolution": "1080P",
+          "ratio": "16:9"
+        }
+      }
+    ]
+  },
+  "documentation": "# Xinhankr Wan Video\n\n这是 Xinhankr（可美视频 AI）万相视频接口的影策系统内置协议插件。\n\n## 能力\n\n- 文生视频\n- 图生视频：单图首帧、双图首尾帧\n- 多图参考生视频\n- 图片、视频、音频多模态参考\n- 文件和网页链接参考\n\n## 配置\n\n只需要配置 `apiKey`，填写 Xinhankr 控制台生成的 API Token。\n\n插件使用固定官方 Base URL：\n\n```text\nhttps://token.xinhankr.com\n```\n\n这是系统内置协议，不需要上传插件包。修改插件包后，重启后端或重新构建镜像才会刷新官方插件注册表。\n\n完整字段和请求响应映射见 [docs/interface.md](docs/interface.md)。\n\n---\n\n# Xinhankr Wan Video 接口说明\n\n## 1. 协议身份\n\n| 项目 | 值 |\n| --- | --- |\n| 插件 ID | `xinhankr-wan-video` |\n| Provider ID | `xinhankr-wan-video` |\n| 能力 | `video` |\n| Base URL | `https://token.xinhankr.com` |\n| 鉴权 | `Authorization: Bearer <apiKey>` |\n| 创建 | `POST /v1/video/generations` |\n| 查询 | `GET /v1/video/generations/{{taskId}}` |\n| 示例模型 | `wan3.0-video` |\n\n## 2. 配置字段\n\n| 字段 | 类型 | 必填 | 含义 |\n| --- | --- | --- | --- |\n| `apiKey` | `secret` | 是 | Xinhankr API Token |\n\n## 3. 请求参数\n\n| 参数 | 类型 | 必填 | 说明 |\n| --- | --- | --- | --- |\n| `model` | string | 是 | 模型 ID，文档示例为 `wan3.0-video`。 |\n| `prompt` | string | 是 | 视频文本提示词。 |\n| `images` | media[] | 否 | 图片输入。 |\n| `videos` | media[] | 否 | 参考视频。 |\n| `audios` | media[] | 否 | 参考音频，不能作为唯一参考素材。 |\n| `duration` | integer | 否 | 时长秒数，默认 `5`。 |\n| `aspectRatio` | string | 否 | 画幅比例，映射为 `ratio`。 |\n| `resolution` | string | 否 | `720P`、`1080P` 等，映射为 `resolution`。 |\n| `providerOptions` | object | 否 | Xinhankr 扩展字段命名空间。 |\n\n`providerOptions.xinhankr-wan-video` 支持：\n\n| 字段 | 类型 | 说明 |\n| --- | --- | --- |\n| `files` | array | 参考文件 URL，映射到顶层 `files`。 |\n| `links` | array | 参考网页 URL，映射到顶层 `links`。 |\n| `size` | string | 分辨率别名，优先于统一字段 `resolution`。 |\n| `ratio` | string | 画幅比例别名，优先于统一字段 `aspectRatio`。 |\n\n## 4. 图片角色规则\n\n图片可以是 URL 字符串，也可以是带 `url` 和 `role` 的对象。影策统一请求会转换为：\n\n```json\n{\n  \"url\": \"https://example.com/frame.png\",\n  \"role\": \"first_frame\"\n}\n```\n\n显式角色：\n\n- `first_frame`：首帧\n- `last_frame`：尾帧\n- `reference_image`：普通参考图\n\n没有显式角色时，插件按照文档规则补充：\n\n- 1 张图：`first_frame`\n- 2 张图：按顺序为 `first_frame`、`last_frame`\n- 3 张及以上：全部为 `reference_image`\n\n首尾帧不能与 `reference_image`、`file`、`link` 等参考类素材混用。声明式插件会保留角色；具体业务限制由上游返回错误。\n\n## 5. 创建请求\n\n```http\nPOST https://token.xinhankr.com/v1/video/generations\nAuthorization: Bearer <apiKey>\nContent-Type: application/json\n```\n\n文生视频示例：\n\n```json\n{\n  \"model\": \"wan3.0-video\",\n  \"prompt\": \"一只金毛寻回犬在金色秋叶中奔跑，电影感慢镜头，阳光穿透树林\",\n  \"resolution\": \"1080P\",\n  \"ratio\": \"16:9\",\n  \"duration\": 5\n}\n```\n\n首尾帧示例：\n\n```json\n{\n  \"model\": \"wan3.0-video\",\n  \"prompt\": \"镜头缓慢推进，人物自然转身，光影连贯\",\n  \"images\": [\n    {\n      \"url\": \"https://example.com/first.png\",\n      \"role\": \"first_frame\"\n    },\n    {\n      \"url\": \"https://example.com/last.png\",\n      \"role\": \"last_frame\"\n    }\n  ],\n  \"resolution\": \"720P\",\n  \"duration\": 5\n}\n```\n\n多模态参考示例：\n\n```json\n{\n  \"model\": \"wan3.0-video\",\n  \"prompt\": \"角色动作跟随参考视频，口型与参考音频一致\",\n  \"images\": [\n    {\n      \"url\": \"https://example.com/character.png\",\n      \"role\": \"reference_image\"\n    }\n  ],\n  \"videos\": [\n    \"https://example.com/motion_ref.mp4\"\n  ],\n  \"audios\": [\n    \"https://example.com/voice_ref.mp3\"\n  ],\n  \"resolution\": \"1080P\",\n  \"duration\": 5\n}\n```\n\n文件和网页链接通过插件扩展字段传递，最终映射为：\n\n```json\n{\n  \"files\": [\n    \"https://example.com/brief.pdf\"\n  ],\n  \"links\": [\n    \"https://example.com/product-page\"\n  ]\n}\n```\n\n## 6. 轮询请求和响应\n\n```http\nGET https://token.xinhankr.com/v1/video/generations/video_task_001\nAuthorization: Bearer <apiKey>\n```\n\n提交响应示例：\n\n```json\n{\n  \"id\": \"video_task_001\",\n  \"task_id\": \"video_task_001\",\n  \"status\": \"pending\"\n}\n```\n\n完成响应示例：\n\n```json\n{\n  \"id\": \"video_task_001\",\n  \"status\": \"completed\",\n  \"data\": [\n    {\n      \"url\": \"https://example.com/output/wan_video.mp4\"\n    }\n  ]\n}\n```\n\n响应映射：\n\n| 统一结果 | 上游路径 |\n| --- | --- |\n| 任务 ID | `data.task_id`、`data.taskId`、`task_id`、`taskId`、`data.id`、`id` |\n| 状态 | `status`、`state`、`data.status` |\n| 错误消息 | `error.message`、`message`、`fail_reason`、`data.message` |\n| 视频结果 | `data[].url` 及兼容的视频 URL 字段 |\n| 错误码 | `error.code`、`code` |\n\n返回的视频 URL 标记为临时媒体，宿主会负责下载并持久化。\n\n## 7. 官方文档中的其他协议说明\n\n快速开始文档还说明了以下兼容鉴权方式：\n\n- `Authorization: Bearer <Token>`：推荐方式，也是本插件使用的方式。\n- `X-Goog-Api-Key: <Token>`：Google 原生协议兼容方式，本视频插件不使用。\n- URL `?key=<Token>`：受限环境透传方式，本插件不使用，以避免把密钥写入 URL。\n\n文档还列出 DashScope 原生视频路由，但那是另一套协议，不属于本插件：\n\n- `POST /api/v1/services/aigc/video-generation/video-synthesis`\n- `GET /api/v1/tasks/{task_id}`\n\n<!-- YINGCE_MANIFEST_CONTRACT_START -->\n## Manifest 完整接口定义\n\n以下 JSON 与插件包内实际 `manifest.json` 逐字段一致，覆盖插件身份、权限、配置、鉴权、参数、校验、创建、Agent、查询、取消、结果下载、响应和 Agent 响应映射。`documentation` 字段的值就是当前完整文档；为避免文档在自身内部无限递归，JSON 中仅用等义占位文本表示正文。\n\n```json\n{\n  \"apiVersion\": \"yingce.plugin/v2\",\n  \"id\": \"xinhankr-wan-video\",\n  \"name\": \"Xinhankr Wan Video\",\n  \"version\": \"1.0.0\",\n  \"author\": \"Xinhankr / 影策\",\n  \"description\": \"Xinhankr 可美视频 AI 的万相视频 OpenAI 兼容协议插件。\",\n  \"permissions\": [\n    \"generation.run\",\n    \"media.read\"\n  ],\n  \"configuration\": {\n    \"fields\": [\n      {\n        \"name\": \"apiKey\",\n        \"type\": \"secret\",\n        \"label\": \"Xinhankr API Token\",\n        \"required\": true,\n        \"description\": \"可美视频 AI 控制台生成的 API Token。\"\n      }\n    ]\n  },\n  \"contributes\": {\n    \"providers\": [\n      {\n        \"id\": \"xinhankr-wan-video\",\n        \"label\": \"Xinhankr Wan Video\",\n        \"capabilities\": [\n          \"video\"\n        ],\n        \"scopes\": [\n          \"admin.system-channel\",\n          \"user.custom-channel\",\n          \"canvas\",\n          \"creation\",\n          \"agent\"\n        ],\n        \"baseUrl\": \"https://token.xinhankr.com\",\n        \"requiresPublicMediaUrls\": true,\n        \"auth\": {\n          \"type\": \"bearer\",\n          \"field\": \"apiKey\"\n        },\n        \"parameters\": [\n          {\n            \"name\": \"model\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"model\",\n            \"description\": \"视频模型 ID；文档示例使用 wan3.0-video。\"\n          },\n          {\n            \"name\": \"prompt\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"prompt\",\n            \"description\": \"视频文本提示词。\"\n          },\n          {\n            \"name\": \"images\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"images\",\n            \"description\": \"图片输入；支持首帧、尾帧和参考图角色。\"\n          },\n          {\n            \"name\": \"videos\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"videos\",\n            \"description\": \"参考视频；默认角色为 reference_video。\"\n          },\n          {\n            \"name\": \"audios\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"audios\",\n            \"description\": \"参考音频；默认角色为 reference_audio，不能作为唯一参考素材。\"\n          },\n          {\n            \"name\": \"duration\",\n            \"type\": \"integer\",\n            \"required\": false,\n            \"mapping\": \"duration\",\n            \"description\": \"视频时长，单位为秒，默认 5。\"\n          },\n          {\n            \"name\": \"aspectRatio\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"mapping\": \"ratio\",\n            \"description\": \"画幅比例，例如 16:9、9:16、1:1。\"\n          },\n          {\n            \"name\": \"resolution\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"mapping\": \"resolution/size\",\n            \"description\": \"分辨率档位，例如 720P、1080P。\"\n          },\n          {\n            \"name\": \"providerOptions\",\n            \"type\": \"object\",\n            \"required\": false,\n            \"mapping\": \"files/links/size/ratio\",\n            \"description\": \"Xinhankr 专用扩展；支持 files、links、size、ratio。\"\n          }\n        ],\n        \"create\": {\n          \"method\": \"POST\",\n          \"path\": \"/v1/video/generations\",\n          \"contentType\": \"application/json\",\n          \"body\": {\n            \"model\": {\n              \"$ref\": \"request.model\"\n            },\n            \"prompt\": {\n              \"$ref\": \"request.prompt\"\n            },\n            \"images\": {\n              \"$omitEmpty\": {\n                \"$map\": {\n                  \"from\": {\n                    \"$sortByOrder\": {\n                      \"$ref\": \"request.images\"\n                    }\n                  },\n                  \"as\": \"media\",\n                  \"in\": {\n                    \"url\": {\n                      \"$ref\": \"media.value\"\n                    },\n                    \"role\": {\n                      \"$coalesce\": [\n                        {\n                          \"$ref\": \"media.role\"\n                        },\n                        {\n                          \"$switch\": {\n                            \"cases\": [\n                              {\n                                \"when\": {\n                                  \"$eq\": [\n                                    {\n                                      \"$len\": {\n                                        \"$ref\": \"request.images\"\n                                      }\n                                    },\n                                    1\n                                  ]\n                                },\n                                \"then\": \"first_frame\"\n                              },\n                              {\n                                \"when\": {\n                                  \"$eq\": [\n                                    {\n                                      \"$len\": {\n                                        \"$ref\": \"request.images\"\n                                      }\n                                    },\n                                    2\n                                  ]\n                                },\n                                \"then\": {\n                                  \"$if\": {\n                                    \"condition\": {\n                                      \"$eq\": [\n                                        {\n                                          \"$ref\": \"mediaIndex\"\n                                        },\n                                        0\n                                      ]\n                                    },\n                                    \"then\": \"first_frame\",\n                                    \"else\": \"last_frame\"\n                                  }\n                                }\n                              }\n                            ],\n                            \"default\": \"reference_image\"\n                          }\n                        }\n                      ]\n                    }\n                  }\n                }\n              }\n            },\n            \"videos\": {\n              \"$omitEmpty\": {\n                \"$map\": {\n                  \"from\": {\n                    \"$sortByOrder\": {\n                      \"$ref\": \"request.videos\"\n                    }\n                  },\n                  \"as\": \"media\",\n                  \"in\": {\n                    \"url\": {\n                      \"$ref\": \"media.value\"\n                    },\n                    \"role\": {\n                      \"$coalesce\": [\n                        {\n                          \"$ref\": \"media.role\"\n                        },\n                        \"reference_video\"\n                      ]\n                    }\n                  }\n                }\n              }\n            },\n            \"audios\": {\n              \"$omitEmpty\": {\n                \"$map\": {\n                  \"from\": {\n                    \"$sortByOrder\": {\n                      \"$ref\": \"request.audios\"\n                    }\n                  },\n                  \"as\": \"media\",\n                  \"in\": {\n                    \"url\": {\n                      \"$ref\": \"media.value\"\n                    },\n                    \"role\": {\n                      \"$coalesce\": [\n                        {\n                          \"$ref\": \"media.role\"\n                        },\n                        \"reference_audio\"\n                      ]\n                    }\n                  }\n                }\n              }\n            },\n            \"files\": {\n              \"$omitEmpty\": {\n                \"$ref\": \"request.providerOptions.xinhankr-wan-video.files\"\n              }\n            },\n            \"links\": {\n              \"$omitEmpty\": {\n                \"$ref\": \"request.providerOptions.xinhankr-wan-video.links\"\n              }\n            },\n            \"resolution\": {\n              \"$omitEmpty\": {\n                \"$upper\": {\n                  \"$coalesce\": [\n                    {\n                      \"$ref\": \"request.providerOptions.xinhankr-wan-video.size\"\n                    },\n                    {\n                      \"$ref\": \"request.resolution\"\n                    }\n                  ]\n                }\n              }\n            },\n            \"ratio\": {\n              \"$omitEmpty\": {\n                \"$coalesce\": [\n                  {\n                    \"$ref\": \"request.providerOptions.xinhankr-wan-video.ratio\"\n                  },\n                  {\n                    \"$ref\": \"request.aspectRatio\"\n                  }\n                ]\n              }\n            },\n            \"duration\": {\n              \"$coalesce\": [\n                {\n                  \"$ref\": \"request.duration\"\n                },\n                5\n              ]\n            }\n          }\n        },\n        \"poll\": {\n          \"method\": \"GET\",\n          \"path\": \"/v1/video/generations/{{taskId}}\",\n          \"contentType\": \"application/json\"\n        },\n        \"response\": {\n          \"taskIdPaths\": [\n            \"data.task_id\",\n            \"data.taskId\",\n            \"task_id\",\n            \"taskId\",\n            \"data.id\",\n            \"id\"\n          ],\n          \"statusPaths\": [\n            \"status\",\n            \"state\",\n            \"data.status\"\n          ],\n          \"messagePaths\": [\n            \"error.message\",\n            \"message\",\n            \"fail_reason\",\n            \"data.message\"\n          ],\n          \"errorPaths\": [\n            \"error.code\",\n            \"code\"\n          ],\n          \"resultPaths\": [\n            \"data\"\n          ],\n          \"resultKind\": \"video\",\n          \"resultEphemeral\": true\n        }\n      }\n    ],\n    \"workflows\": [\n      {\n        \"id\": \"xinhankr-wan-video-generate\",\n        \"label\": \"Xinhankr 万相视频生成\",\n        \"providerId\": \"xinhankr-wan-video\",\n        \"capability\": \"video\",\n        \"parameters\": [\n          {\n            \"name\": \"model\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"description\": \"模型 ID，默认示例为 wan3.0-video。\"\n          },\n          {\n            \"name\": \"prompt\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"description\": \"视频提示词。\"\n          },\n          {\n            \"name\": \"images\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"description\": \"首帧、首尾帧或多图参考。\"\n          },\n          {\n            \"name\": \"videos\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"description\": \"参考视频。\"\n          },\n          {\n            \"name\": \"audios\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"description\": \"参考音频。\"\n          },\n          {\n            \"name\": \"duration\",\n            \"type\": \"integer\",\n            \"required\": false,\n            \"description\": \"时长秒数。\"\n          },\n          {\n            \"name\": \"resolution\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"values\": [\n              \"720P\",\n              \"1080P\"\n            ],\n            \"description\": \"分辨率。\"\n          },\n          {\n            \"name\": \"ratio\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"values\": [\n              \"16:9\",\n              \"9:16\",\n              \"1:1\"\n            ],\n            \"description\": \"画幅比例。\"\n          },\n          {\n            \"name\": \"files\",\n            \"type\": \"array\",\n            \"required\": false,\n            \"description\": \"参考文件 URL；通过 providerOptions.xinhankr-wan-video.files 传递。\"\n          },\n          {\n            \"name\": \"links\",\n            \"type\": \"array\",\n            \"required\": false,\n            \"description\": \"参考网页 URL；通过 providerOptions.xinhankr-wan-video.links 传递。\"\n          }\n        ],\n        \"defaults\": {\n          \"model\": \"wan3.0-video\",\n          \"duration\": 5,\n          \"resolution\": \"1080P\",\n          \"ratio\": \"16:9\"\n        }\n      }\n    ]\n  },\n  \"documentation\": \"<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>\"\n}\n```\n<!-- YINGCE_MANIFEST_CONTRACT_END -->\n"
+}

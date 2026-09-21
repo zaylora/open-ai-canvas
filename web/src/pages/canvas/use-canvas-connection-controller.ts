@@ -435,19 +435,21 @@ export function useCanvasConnectionController({
                 const anchor = getConnectionTargetAnchor(node, current, targetHandleId, scrollTop);
                 const dx = world.x - anchor.x;
                 const dy = world.y - anchor.y;
-                // Do not treat the node body or a rectangular padding band as a
-                // connection target. LibTV snaps only inside the circular
-                // quick-add area centred on the corresponding side handle.
+                // Handle zones win over the node body. The body is a fallback
+                // target for ordinary nodes; special nodes still require their
+                // row/column handle so their semantic input is preserved.
                 const hitsSnapZone = dx * dx + dy * dy <= handleRadius * handleRadius;
-                if (!hitsSnapZone) return;
+                const insideNode = world.x >= node.position.x && world.x <= node.position.x + node.width && world.y >= node.position.y && world.y <= node.position.y + node.height;
+                if (!hitsSnapZone && !insideNode) return;
                 isNearNode = true;
                 const normalized = node.id === current.nodeId ? null : normalizeConnection(current.nodeId, node.id, nodesRef.current, current.handleType);
                 if (!normalized || canvasConnectionError(config, nodesRef.current, connectionsRef.current, normalized)) return;
-                if (1 < bestPriority) {
+                const priority = hitsSnapZone ? 1 : 2;
+                if (priority < bestPriority) {
                     bestNodeId = node.id;
                     bestHandleId = targetHandleId;
                     bestAnchorRatio = targetAnchorRatio;
-                    bestPriority = 1;
+                    bestPriority = priority;
                 }
             });
         return { nodeId: bestNodeId, handleId: bestHandleId, anchorRatio: bestAnchorRatio, isNearNode };
@@ -481,14 +483,16 @@ export function useCanvasConnectionController({
                 const dx = world.x - anchor.x;
                 const dy = world.y - anchor.y;
                 const hitsSnapZone = dx * dx + dy * dy <= handleRadius * handleRadius;
-                if (!hitsSnapZone) return;
+                const insideNode = world.x >= node.position.x && world.x <= node.position.x + node.width && world.y >= node.position.y && world.y <= node.position.y + node.height;
+                if (!hitsSnapZone && !insideNode) return;
                 isNearNode = true;
                 if (!hasBatchConnectionCandidate(sourceNodeIds, node.id, nodesRef.current)) return;
-                if (1 < bestPriority) {
+                const priority = hitsSnapZone ? 1 : 2;
+                if (priority < bestPriority) {
                     bestNodeId = node.id;
                     bestHandleId = targetHandleId;
                     bestAnchorRatio = targetAnchorRatio;
-                    bestPriority = 1;
+                    bestPriority = priority;
                 }
             });
         return { nodeId: bestNodeId, handleId: bestHandleId, anchorRatio: bestAnchorRatio, isNearNode };

@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { Input, Modal } from "antd";
 import { AudioLines, BookOpenText, Clock3, FileText, Image, Pencil, Search, Video } from "lucide-react";
 
+import { CANVAS_THUMBNAIL_VARIANT_WIDTH, imagePreviewUrl } from "@/lib/canvas/image-variant";
 import { WorkspaceState } from "@/components/layout/workspace-state";
 import { canvasNodeMaterialSummary, canvasNodeSearchContext, canvasNodeSearchTimes, searchCanvasNodes } from "@/lib/canvas/canvas-node-search";
 import { canvasNodeVideoPreviewUrl } from "@/lib/canvas/canvas-media-preview";
@@ -125,6 +126,8 @@ const CanvasNodeSearchResult = memo(function CanvasNodeSearchResult({ node, acti
 
 function CanvasNodeSearchThumbnail({ node }: { node: CanvasNodeData }) {
     const [failed, setFailed] = useState(false);
+    // 变体失败时 CDN 返回错误而不是原图，所以先退回原图，再失败才走文字兜底。
+    const [variantFailed, setVariantFailed] = useState(false);
     const mediaSource = node.type === CanvasNodeType.Video ? canvasNodeVideoPreviewUrl(node) : node.metadata?.drawingPreviewUrl
         || node.metadata?.characterCoverUrl
         || node.metadata?.folder?.themeCover
@@ -133,7 +136,8 @@ function CanvasNodeSearchThumbnail({ node }: { node: CanvasNodeData }) {
     const commonStyle = { borderColor: "color-mix(in srgb, var(--foreground) 9%, transparent)", background: "color-mix(in srgb, var(--foreground) 5%, transparent)" };
 
     if (mediaSource && !failed) {
-        return <img src={mediaSource} alt="" width={64} height={44} loading="lazy" decoding="async" className={commonClass} style={commonStyle} onError={() => setFailed(true)} />;
+        const displaySource = variantFailed ? mediaSource : imagePreviewUrl(mediaSource, CANVAS_THUMBNAIL_VARIANT_WIDTH);
+        return <img src={displaySource} alt="" width={64} height={44} loading="lazy" decoding="async" className={commonClass} style={commonStyle} onError={() => (variantFailed ? setFailed(true) : setVariantFailed(true))} />;
     }
 
     const textPreview = node.metadata?.previewContent || node.metadata?.composerContent || node.metadata?.prompt || node.metadata?.content;

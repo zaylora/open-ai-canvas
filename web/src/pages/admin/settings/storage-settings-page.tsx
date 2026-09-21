@@ -5,7 +5,7 @@ import { AlertTriangle, BadgeCheck, Check, Cloud, Database, Globe2, HardDrive, K
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBlocker } from "react-router";
 
-import { changesRequireOSSRetest, DEFAULT_OSS_PATH_PREFIX, getS3PresetHints, normalizeOSSConnectionTestInput, S3_PRESET_OPTIONS, type OSSConnectionTestResult, type S3Preset } from "@/lib/oss-settings";
+import { changesRequireOSSRetest, DEFAULT_OSS_PATH_PREFIX, getS3PresetHints, normalizeOSSConnectionTestInput, S3_PRESET_OPTIONS, supportsImageTransform, type OSSConnectionTestResult, type S3Preset } from "@/lib/oss-settings";
 import { cn } from "@/lib/utils";
 import { getAdminOSSSetting, testAdminOSSConnection, updateAdminOSSSetting, type AdminOSSSetting } from "@/services/api/auth";
 import { useAppearanceStore } from "@/stores/use-appearance-store";
@@ -27,9 +27,10 @@ type OSSFormValues = {
     s3Preset: S3Preset;
     pathStyle: boolean;
     allowUserS3: boolean;
+    imageTransform: boolean;
 };
 
-type StoragePayload = Pick<AdminOSSSetting, "enabled" | "provider" | "region" | "endpoint" | "cdnBaseUrl" | "bucket" | "accessKeyId" | "accessKeySecret" | "sessionToken" | "publicBaseUrl" | "pathPrefix" | "s3Preset" | "pathStyle" | "allowUserS3">;
+type StoragePayload = Pick<AdminOSSSetting, "enabled" | "provider" | "region" | "endpoint" | "cdnBaseUrl" | "bucket" | "accessKeyId" | "accessKeySecret" | "sessionToken" | "publicBaseUrl" | "pathPrefix" | "s3Preset" | "pathStyle" | "allowUserS3" | "imageTransform">;
 
 const STORAGE_MODES: Array<{ mode: StorageMode; label: string; short: string; description: string }> = [
     { mode: "local", label: "服务器本地", short: "本地磁盘", description: "新增资源写入当前部署的数据目录，通过后端签名链接访问。" },
@@ -312,6 +313,9 @@ export default function StorageSettingsPage() {
     const currentValues = form.getFieldsValue(true);
     const normalizedDraft = normalizeStoragePayload(currentValues, setting);
     const hasCurrentProviderSecret = draftMode !== "local" && setting.provider === draftMode && setting.hasAccessKeySecret;
+    // 图片变体只有 R2 一种实现，开关随 R2 预设出现，并要求 CDN 域名已经填好。
+    const showImageTransform = draftMode === "s3" && currentValues.s3Preset === "r2";
+    const imageTransformAvailable = supportsImageTransform({ provider: draftMode, s3Preset: currentValues.s3Preset, cdnBaseUrl: currentValues.cdnBaseUrl });
 
     return (
         <AdminPageFrame title="存储服务" description="配置新增资源的默认存储位置" scroll>
@@ -545,6 +549,20 @@ export default function StorageSettingsPage() {
                                                 <Input autoComplete="off" inputMode="url" placeholder="https://media.example.com" />
                                             </Form.Item>
                                         </div>
+                                        {showImageTransform ? (
+                                            <Form.Item
+                                                name="imageTransform"
+                                                label="图片变体交付"
+                                                valuePropName="checked"
+                                                extra={
+                                                    imageTransformAvailable
+                                                        ? "画布按显示宽度读取缩放后的图片，导出、抽帧和模型输入仍使用原图。需要先在 Cloudflare 为该域名启用 Images → Transformations，按唯一转换次数计费。"
+                                                        : "需要先填写已接入 Cloudflare 的 CDN 加速域名；R2 的 r2.dev 地址不走 Cloudflare 边缘，无法使用。"
+                                                }
+                                            >
+                                                <Switch disabled={!imageTransformAvailable} checkedChildren="开启" unCheckedChildren="关闭" />
+                                            </Form.Item>
+                                        ) : null}
                                     </div>
 
                                     <div className="admin-storage-form-section">
@@ -624,6 +642,7 @@ function formValues(setting: AdminOSSSetting): OSSFormValues {
         s3Preset: setting.s3Preset || "custom",
         pathStyle: setting.pathStyle === true,
         allowUserS3: setting.allowUserS3 === true,
+        imageTransform: setting.imageTransform === true,
     };
 }
 
@@ -640,6 +659,7 @@ function providerDraftValues(mode: Exclude<StorageMode, "local">, setting: Admin
             pathPrefix: setting.pathPrefix || pathPrefix || "",
             s3Preset: setting.s3Preset || "custom",
             pathStyle: setting.pathStyle === true,
+            imageTransform: setting.imageTransform === true,
         };
     }
     return {
@@ -653,6 +673,7 @@ function providerDraftValues(mode: Exclude<StorageMode, "local">, setting: Admin
         pathPrefix: pathPrefix || DEFAULT_OSS_PATH_PREFIX,
         s3Preset: "custom",
         pathStyle: false,
+        imageTransform: false,
     };
 }
 
@@ -662,21 +683,26 @@ function normalizeStoragePayload(values: Partial<OSSFormValues>, setting: AdminO
     const region = values.region?.trim() || "";
     let endpoint = trimTrailingSlash(values.endpoint || "");
     if (provider === "tencent" && !endpoint && region) endpoint = `https://cos.${region}.myqcloud.com`;
+    const cdnBaseUrl = trimTrailingSlash(values.cdnBaseUrl || "");
+    const s3Preset = values.s3Preset || "custom";
     return {
         enabled: mode !== "local",
         provider,
         region,
         endpoint,
-        cdnBaseUrl: trimTrailingSlash(values.cdnBaseUrl || ""),
+        cdnBaseUrl,
         bucket: values.bucket?.trim() || "",
         accessKeyId: values.accessKeyId?.trim() || "",
         accessKeySecret: values.accessKeySecret?.trim() || "",
         sessionToken: values.sessionToken?.trim() || "",
         publicBaseUrl: trimTrailingSlash(values.publicBaseUrl || ""),
         pathPrefix: (values.pathPrefix?.trim() || DEFAULT_OSS_PATH_PREFIX).replace(/^\/+|\/+$/g, ""),
-        s3Preset: values.s3Preset || "custom",
+        s3Preset,
         pathStyle: values.pathStyle === true,
         allowUserS3: values.allowUserS3 === true,
+        // 与后端 normalizeOSSSetting 同步强制前提：换掉 R2 或清空 CDN 域名后开关自动失效，
+        // 否则草稿会带着一个后端必定丢弃的 true，保存后校验为「响应与期望不一致」。
+        imageTransform: values.imageTransform === true && supportsImageTransform({ provider, s3Preset, cdnBaseUrl }),
     };
 }
 
@@ -717,7 +743,7 @@ function validatePublicBaseURL(value: string) {
 
 function storageResponseMatches(setting: AdminOSSSetting, expected: StoragePayload) {
     const actual = normalizeStoragePayload(formValues(setting), setting);
-    const fields: Array<keyof StoragePayload> = ["enabled", "provider", "region", "endpoint", "cdnBaseUrl", "bucket", "accessKeyId", "publicBaseUrl", "pathPrefix", "s3Preset", "pathStyle", "allowUserS3"];
+    const fields: Array<keyof StoragePayload> = ["enabled", "provider", "region", "endpoint", "cdnBaseUrl", "bucket", "accessKeyId", "publicBaseUrl", "pathPrefix", "s3Preset", "pathStyle", "allowUserS3", "imageTransform"];
     if (expected.accessKeySecret && !setting.hasAccessKeySecret) return false;
     if (expected.sessionToken && !setting.hasSessionToken) return false;
     return fields.every((key) => actual[key] === expected[key]);
@@ -739,6 +765,7 @@ function isAdminOSSSetting(value: unknown): value is AdminOSSSetting {
         typeof setting.hasSessionToken === "boolean" &&
         typeof setting.pathStyle === "boolean" &&
         typeof setting.allowUserS3 === "boolean" &&
+        typeof setting.imageTransform === "boolean" &&
         typeof setting.publicBaseUrl === "string" &&
         typeof setting.pathPrefix === "string"
     );

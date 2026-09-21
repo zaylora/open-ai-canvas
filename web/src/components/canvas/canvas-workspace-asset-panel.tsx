@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { App, Button, Select } from "antd";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { FileText, Images, Plus, RefreshCw } from "lucide-react";
+import { CANVAS_THUMBNAIL_VARIANT_WIDTH } from "@/lib/canvas/image-variant";
 import { CachedResourceImage } from "@/components/cached-resource-image";
 import { WorkspaceState } from "@/components/layout/workspace-state";
 import { ASSET_CATEGORY_LABELS, type AssetCategory } from "@/lib/asset-category";
@@ -96,7 +97,7 @@ export function CanvasWorkspaceAssetPanel({ onInsert, onManage, onProjectAssets 
                     return (
                         <div key={asset.id} className="group flex items-center gap-2 rounded-md p-2 hover:bg-surface-hover">
                             <div className="grid h-11 w-14 shrink-0 place-items-center overflow-hidden rounded-md border border-border">
-                                <CachedResourceImage src={cover} storageKey={asset.kind === "image" ? asset.data.storageKey : undefined} alt="" className="h-full w-full object-cover" fallback={<FileText className="size-4 text-muted-foreground" />} />
+                                <CachedResourceImage src={cover} storageKey={asset.kind === "image" ? asset.data.storageKey : undefined} alt="" className="h-full w-full object-cover" fallback={<FileText className="size-4 text-muted-foreground" />} variantWidth={CANVAS_THUMBNAIL_VARIANT_WIDTH} />
                             </div>
                             <div className="min-w-0 flex-1">
                                 <div className="truncate text-sm" title={asset.title}>

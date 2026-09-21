@@ -162,6 +162,16 @@ function loadImage(dataUrl: string) {
     return new Promise<HTMLImageElement>((resolve) => {
         const image = new Image();
         image.onload = () => resolve(image);
+        if (isHttpUrl(dataUrl)) image.crossOrigin = "anonymous";
         image.src = dataUrl;
     });
+}
+
+function isHttpUrl(source: string) {
+    try {
+        const url = new URL(source, window.location.href);
+        return /^https?:$/.test(url.protocol);
+    } catch {
+        return false;
+    }
 }
