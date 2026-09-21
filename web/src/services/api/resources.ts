@@ -40,6 +40,7 @@ export type UserOSSSetting = {
     hasSessionToken: boolean;
     pathStyle: boolean;
     allowUserS3: boolean;
+    imageTransform: boolean;
     publicBaseUrl: string;
     pathPrefix: string;
     testedAt?: string;

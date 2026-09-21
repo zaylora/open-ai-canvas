@@ -1,6 +1,7 @@
 import { memo, useState } from "react";
 import { AudioLines, Clock3, FileText, Image, Layers, Pencil, Search, X } from "lucide-react";
 
+import { CANVAS_THUMBNAIL_VARIANT_WIDTH, imagePreviewUrl } from "@/lib/canvas/image-variant";
 import { WorkspaceState } from "@/components/layout/workspace-state";
 import { canvasNodeMaterialSummary, canvasNodeSearchContext, canvasNodeSearchTimes } from "@/lib/canvas/canvas-node-search";
 import { canvasNodeVideoPreviewUrl } from "@/lib/canvas/canvas-media-preview";
@@ -102,6 +103,8 @@ const CanvasNodeListItem = memo(function CanvasNodeListItem({ node, active, onSe
 
 function CanvasNodeListThumbnail({ node }: { node: CanvasNodeData }) {
     const [failed, setFailed] = useState(false);
+    // 变体失败时 CDN 返回错误而不是原图，所以先退回原图，再失败才走文字兜底。
+    const [variantFailed, setVariantFailed] = useState(false);
     const mediaSource =
         node.type === CanvasNodeType.Video
             ? canvasNodeVideoPreviewUrl(node)
@@ -113,7 +116,8 @@ function CanvasNodeListThumbnail({ node }: { node: CanvasNodeData }) {
     const commonStyle = { borderColor: "color-mix(in srgb, var(--foreground) 9%, transparent)", background: "color-mix(in srgb, var(--foreground) 5%, transparent)" };
 
     if (mediaSource && !failed) {
-        return <img src={mediaSource} alt="" width={44} height={36} loading="lazy" decoding="async" className={commonClass} style={commonStyle} onError={() => setFailed(true)} />;
+        const displaySource = variantFailed ? mediaSource : imagePreviewUrl(mediaSource, CANVAS_THUMBNAIL_VARIANT_WIDTH);
+        return <img src={displaySource} alt="" width={44} height={36} loading="lazy" decoding="async" className={commonClass} style={commonStyle} onError={() => (variantFailed ? setFailed(true) : setVariantFailed(true))} />;
     }
 
     const textPreview = node.metadata?.previewContent || node.metadata?.composerContent || node.metadata?.prompt || node.metadata?.content;

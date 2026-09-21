@@ -4,6 +4,7 @@ import { CachedResourceImage } from "@/components/cached-resource-image";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { isFrameNode, isNodeHiddenByCollapsedFrame } from "@/lib/canvas/canvas-frame";
 import { buildLibTVImagePreviewUrl } from "@/lib/canvas/libtv-import";
+import { CANVAS_MINIMAP_VARIANT_WIDTH, imagePreviewUrl } from "@/lib/canvas/image-variant";
 import { getNodeLabel } from "@/lib/canvas/node-registry/node-registry";
 import { subscribeCanvasViewportPreview } from "@/lib/canvas/canvas-live-viewport";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
@@ -186,6 +187,7 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
                                         draggable={false}
                                         className="size-full object-cover"
                                         fallback={null}
+                                        variantWidth={CANVAS_MINIMAP_VARIANT_WIDTH}
                                     />
                                 ) : null}
                             </div>
@@ -209,5 +211,6 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
 function getImagePreviewSource(node: CanvasNodeData) {
     if (node.type !== CanvasNodeType.Image) return "";
     const content = node.metadata?.content || "";
-    return node.metadata?.previewContent || (node.metadata?.importSource?.provider === "libtv" ? buildLibTVImagePreviewUrl(content) : content);
+    const source = node.metadata?.previewContent || (node.metadata?.importSource?.provider === "libtv" ? buildLibTVImagePreviewUrl(content) : content);
+    return imagePreviewUrl(source, CANVAS_MINIMAP_VARIANT_WIDTH);
 }

@@ -11,6 +11,7 @@ import { loadCanvasDrawingPreview } from "@/lib/canvas/canvas-drawing-storage";
 import { canvasNodeVideoPreviewUrl } from "@/lib/canvas/canvas-media-preview";
 import { bindCanvasVideoHoverPreview } from "@/lib/canvas/canvas-video-hover-preview";
 import { buildLibTVImagePreviewUrl, buildLibTVVideoSourceUrl } from "@/lib/canvas/libtv-import";
+import { imagePreviewUrl } from "@/lib/canvas/image-variant";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import type { CanvasTheme } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
@@ -591,6 +592,11 @@ function ImageContent({ node, theme, isBatchRoot, batchCount, batchPreviewNodes,
     const importedFromLibTV = node.metadata?.importSource?.provider === "libtv";
     const { updateMediaNode } = useCanvasNodeActions();
     const measuredSizeRef = useRef<{ width: number; height: number } | null>(null);
+    // 变体由 CDN 实时生成，源图超限或格式不支持时返回错误而不是原图，必须自己退回一次。
+    const [variantFailed, setVariantFailed] = useState(false);
+    const displayUrl = variantFailed ? url : imagePreviewUrl(url);
+    const usingVariant = displayUrl !== url;
+    useEffect(() => setVariantFailed(false), [url]);
 
     /**
      * 让节点跟随图片真实比例。
@@ -603,8 +609,9 @@ function ImageContent({ node, theme, isBatchRoot, batchCount, batchPreviewNodes,
      * 手动拉过（manualSize）或自由比例（freeResize）的节点只补记尺寸、不动宽高。
      */
     const fitToImage = (element: HTMLImageElement) => {
-        // LibTV 已提供原图尺寸和节点尺寸；960px 缩略图不能反向覆盖这些数据。
-        if (importedFromLibTV) return;
+        // 展示的不是原图时 naturalWidth 量到的是缩略图尺寸，回写会把节点比例和
+        // metadata 一起写坏：LibTV 导入自带 960px 预览，CDN 变体同理。
+        if (importedFromLibTV || usingVariant) return;
         const naturalWidth = element.naturalWidth;
         const naturalHeight = element.naturalHeight;
         if (!naturalWidth || !naturalHeight) return;
@@ -630,7 +637,7 @@ function ImageContent({ node, theme, isBatchRoot, batchCount, batchPreviewNodes,
     return (
         <BatchFrame batchPreviewNodes={batchPreviewNodes} batchCount={isBatchRoot ? batchCount : 0} batchExpanded={batchExpanded} batchOpening={batchOpening} batchRecovering={batchRecovering} theme={theme} onToggleBatch={onToggleBatch}>
             <div ref={imageContainerRef} className="h-full w-full overflow-hidden rounded-[var(--node-radius)]">
-                {url ? <img src={url} alt={node.title} loading="lazy" decoding="async" draggable={false} onDragStart={(event) => event.preventDefault()} onLoad={(event) => fitToImage(event.currentTarget)} className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`} /> : <div className="grid size-full place-items-center" style={{ color: theme.node.muted }}>{loading ? <LoaderCircle className="size-5 animate-spin" /> : <ImageIcon className="size-5 opacity-45" />}</div>}
+                {url ? <img src={displayUrl} alt={node.title} loading="lazy" decoding="async" draggable={false} onDragStart={(event) => event.preventDefault()} onLoad={(event) => fitToImage(event.currentTarget)} onError={() => { if (usingVariant) setVariantFailed(true); }} className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`} /> : <div className="grid size-full place-items-center" style={{ color: theme.node.muted }}>{loading ? <LoaderCircle className="size-5 animate-spin" /> : <ImageIcon className="size-5 opacity-45" />}</div>}
             </div>
         </BatchFrame>
     );

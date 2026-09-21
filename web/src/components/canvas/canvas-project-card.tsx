@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { App, Dropdown, Input } from "antd";
 
+import { CANVAS_THUMBNAIL_VARIANT_WIDTH } from "@/lib/canvas/image-variant";
 import { useCanvasStore, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
@@ -167,7 +168,7 @@ export function ProjectPreview({ project, preferLatestImage = false }: { project
                     <Video className="size-8" aria-label={media.node.title || "项目视频"} />
                 </div>
             ) : (
-                <CachedResourceImage storageKey={media.storageKey} src={media.url} alt={media.node.title || "项目图片"} loading="lazy" decoding="async" className="size-full min-h-0 object-cover" fallback={<MediaPlaceholder failed />} loadingFallback={<MediaPlaceholder label="正在读取封面" />} />
+                <CachedResourceImage storageKey={media.storageKey} src={media.url} alt={media.node.title || "项目图片"} loading="lazy" decoding="async" className="size-full min-h-0 object-cover" variantWidth={CANVAS_THUMBNAIL_VARIANT_WIDTH} fallback={<MediaPlaceholder failed />} loadingFallback={<MediaPlaceholder label="正在读取封面" />} />
             )}
         </div>
     ) : !project.nodes.length ? (

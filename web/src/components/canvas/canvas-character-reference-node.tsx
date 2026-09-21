@@ -1,14 +1,20 @@
 import { Image as ImageIcon, UserRound, Volume2 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
+import { CANVAS_NODE_VARIANT_WIDTH, imagePreviewUrl } from "@/lib/canvas/image-variant";
 import type { CanvasNodeData } from "@/types/canvas";
 
 export function CanvasCharacterReferenceNodeContent({ node }: { node: CanvasNodeData }) {
     const visualReady = node.metadata?.characterVisualStatus === "ready";
     const voiceReady = node.metadata?.characterVoiceStatus === "ready";
+    const coverUrl = node.metadata?.characterCoverUrl;
+    // 变体由 CDN 实时生成，失败时返回错误而不是原图，必须自己退回一次。
+    const [variantFailed, setVariantFailed] = useState(false);
+    useEffect(() => setVariantFailed(false), [coverUrl]);
+    const coverSource = coverUrl ? (variantFailed ? coverUrl : imagePreviewUrl(coverUrl, CANVAS_NODE_VARIANT_WIDTH)) : "";
     return <div className="flex h-full w-full flex-col overflow-hidden bg-background">
         <div className="relative min-h-0 flex-1 overflow-hidden bg-foreground/[.045]">
-            {node.metadata?.characterCoverUrl ? <img src={node.metadata.characterCoverUrl} alt={node.metadata?.characterName || node.title} className="h-full w-full object-contain p-2" draggable={false} /> : <div className="grid h-full place-items-center text-foreground/22"><UserRound className="size-12" /></div>}
+            {coverSource ? <img src={coverSource} alt={node.metadata?.characterName || node.title} className="h-full w-full object-contain p-2" draggable={false} onError={() => setVariantFailed(true)} /> : <div className="grid h-full place-items-center text-foreground/22"><UserRound className="size-12" /></div>}
             <span className="absolute left-3 top-3 rounded bg-black/60 px-2 py-1 text-[var(--fs-tiny)] font-medium text-white">角色引用</span>
         </div>
         <div className="shrink-0 border-t border-border/70 px-3 py-2.5">

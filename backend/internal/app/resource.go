@@ -136,6 +136,13 @@ func (s *Service) prepareResourceDelivery(userID string, resource *model.Resourc
 			return &ResourceDelivery{Resource: resource, RedirectURL: redirectURL}, nil
 		}
 		if setting.CDNBaseURL != "" {
+			// 变体只服务浏览器展示：图片之外的类型、以及不支持变体的存储配置都回退原图，
+			// 导出和上游输入走的字节路径不会经过这里。
+			if options.ImageWidth > 0 && strings.HasPrefix(resource.MimeType, "image/") {
+				if variantURL, ok := ossImageVariantURL(setting, resource.ObjectKey, options.ImageWidth); ok {
+					return &ResourceDelivery{Resource: resource, RedirectURL: variantURL}, nil
+				}
+			}
 			redirectURL, err := ossCDNObjectURL(setting.CDNBaseURL, resource.ObjectKey)
 			if err != nil {
 				return nil, err
@@ -996,18 +1003,25 @@ func (s *Service) ossSettingForResource(userID string, resource *model.Resource)
 	var setting ossSettingValue
 	var err error
 	if resource.StorageSettingID != "" {
-		_, setting, err = s.storageLocationValue(resource.StorageSettingID)
+		var location *model.StorageLocation
+		location, setting, err = s.storageLocationValue(resource.StorageSettingID)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			location = nil
 			_, setting, err = s.readUserOSSSettingByID(userID, resource.StorageSettingID)
 		}
 		if err == nil {
-			_, current, currentErr := s.readUserOSSSetting(userID)
+			current, currentErr := s.currentDeliverySetting(location, userID)
 			if currentErr != nil {
 				return ossSettingValue{}, currentErr
 			}
-			// 密钥固定在资源绑定的历史版本；只有存储位置完全一致时，才允许沿用当前 CDN。
+			// 密钥固定在资源绑定的历史版本；只有存储位置完全一致时，才允许沿用当前出口。
+			// CDN 域名和变体开关都是交付策略而非存储位置身份：storageLocationDigest 不含这两个
+			// 字段，建档后的保存也不会刷新快照（requireTestedS3Location 只按 digest 取已测试的
+			// 位置）。因此必须回到当前设置取值，否则管理员后来打开变体交付，图片仍然落在
+			// CDN 原图而不是 /cdn-cgi/image。
 			if resourceStorageMatches(current, resource) {
 				setting.CDNBaseURL = current.CDNBaseURL
+				setting.ImageTransform = current.ImageTransform
 			}
 		}
 	} else {
@@ -1033,6 +1047,8 @@ func (s *Service) ossSettingForResource(userID string, resource *model.Resource)
 	// 否则切换到七牛后会把历史阿里云 objectKey 拼成七牛域名。
 	if !resourceMatchesSetting || (resourceProvider != "" && resourceProvider != setting.Provider) {
 		setting.CDNBaseURL = ""
+		// 变体地址建立在 CDN 域名之上，出口失效时必须一并关闭，不能让历史对象走 /cdn-cgi/image。
+		setting.ImageTransform = false
 	}
 	if setting.AccessKeyID == "" || setting.AccessKeySecret == "" {
 		return ossSettingValue{}, errors.New("对象存储访问密钥不可用")
@@ -1055,6 +1071,18 @@ func (s *Service) userOSSSettingForResource(userID string, resource *model.Resou
 		}
 	}
 	return ossSettingValue{}, gorm.ErrRecordNotFound
+}
+
+// currentDeliverySetting 取存储位置所属 scope 的当前设置，用于刷新交付出口字段。
+// 平台位置必须读 system_settings：allowUserS3 关闭的部署里 user_oss_settings 是空表，
+// 用 readUserOSSSetting 会拿到默认值，resourceStorageMatches 直接判不匹配。
+func (s *Service) currentDeliverySetting(location *model.StorageLocation, userID string) (ossSettingValue, error) {
+	if location != nil && location.Scope == "platform" {
+		_, value, err := s.readOSSSetting()
+		return value, err
+	}
+	_, value, err := s.readUserOSSSetting(userID)
+	return value, err
 }
 
 func resourceStorageMatches(setting ossSettingValue, resource *model.Resource) bool {

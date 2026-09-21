@@ -23,16 +23,25 @@ foreach ($directory in @($dataDir, $goBuildCache, $goModuleCache)) {
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
 }
 
-$viteBinary = Join-Path $webDir "node_modules\.bin\vite"
-if (-not (Test-Path -LiteralPath $viteBinary)) {
+$viteInstalled = @("vite", "vite.exe", "vite.cmd", "vite.bunx") |
+    ForEach-Object { Join-Path $webDir "node_modules\.bin\$_" } |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Select-Object -First 1
+if (-not $viteInstalled) {
     Write-Host "web/node_modules 不存在，正在执行 bun install --frozen-lockfile..." -ForegroundColor Yellow
     Push-Location $webDir
+    # BUN_OPTIONS 会被注入每次 bun 调用，使 bun 把 install 当成 package.json 脚本名，安装期间必须清除。
+    $previousBunOptions = $env:BUN_OPTIONS
     try {
+        Remove-Item Env:BUN_OPTIONS -ErrorAction SilentlyContinue
         & bun install --frozen-lockfile
         if ($LASTEXITCODE -ne 0) {
             throw "bun install 失败，无法启动前端。"
         }
     } finally {
+        if ($null -ne $previousBunOptions) {
+            $env:BUN_OPTIONS = $previousBunOptions
+        }
         Pop-Location
     }
 }
@@ -82,6 +91,7 @@ $webCommand = @"
 `$ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $webDirLiteral
 `$env:VITE_API_PROXY_TARGET = 'http://127.0.0.1:8080'
+Remove-Item Env:BUN_OPTIONS -ErrorAction SilentlyContinue
 Write-Host '影策前端：http://localhost:3000' -ForegroundColor Cyan
 bun run dev
 "@

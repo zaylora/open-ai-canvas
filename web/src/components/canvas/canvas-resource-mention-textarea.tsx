@@ -10,6 +10,7 @@ import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { buildAssetMentionReferences, canvasResourceMentionToken, findCanvasResourceAutoLinkMatch, type CanvasResourceAutoLinkMatch, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { useAssetStore, type AssetCategory } from "@/stores/use-asset-store";
 import { CanvasNodeType } from "@/types/canvas";
+import { CANVAS_THUMBNAIL_VARIANT_WIDTH, imagePreviewUrl } from "@/lib/canvas/image-variant";
 import { useResolvedCanvasResourceReferences } from "./use-resolved-canvas-resource-references";
 
 type MentionState = {
@@ -654,6 +655,17 @@ function referencePreviewUrl(reference: CanvasResourceReference) {
     return reference.previewUrl || (reference.kind === "video" ? reference.mediaUrl : "") || "";
 }
 
+/**
+ * 小图位（菜单头像、输入框 chip）统一走这里，不能直接用 reference.previewUrl：
+ * 那是原图地址，菜单一次展开就会拉十几张 4K 原图。
+ * createInlinePreview 与 syncInlineMentionPreviews 必须共用本函数——后者靠比较 src
+ * 决定是否重建节点，两边算出不同地址会让 chip 每次同步都被替换一遍。
+ * 点击放大走 referencePreviewUrl，保持原图。
+ */
+function referenceThumbnailUrl(reference: CanvasResourceReference) {
+    return imagePreviewUrl(reference.previewUrl || "", CANVAS_THUMBNAIL_VARIANT_WIDTH);
+}
+
 function InlineReferencePreview({ reference, onClose }: { reference: CanvasResourceReference; onClose: () => void }) {
     const url = referencePreviewUrl(reference);
     if (!url) return null;
@@ -672,7 +684,7 @@ function createInlinePreview(reference: CanvasResourceReference) {
     if ((reference.kind === "image" || reference.kind === "video" || reference.kind === "character") && reference.previewUrl) {
         const media = document.createElement("img");
         media.className = `canvas-resource-inline-preview is-${reference.kind}`;
-        media.setAttribute("src", reference.previewUrl);
+        media.setAttribute("src", referenceThumbnailUrl(reference));
         media.setAttribute("alt", "");
         return media;
     }
@@ -704,7 +716,7 @@ function syncInlineMentionPreviews(editor: HTMLElement, references: CanvasResour
         const hasVideo = !hasImage && reference.kind === "video" && Boolean(reference.mediaUrl);
         const tag = hasImage ? "IMG" : hasVideo ? "VIDEO" : "SPAN";
         const className = `canvas-resource-inline-preview is-${hasImage || hasVideo ? reference.kind : "fallback"}`;
-        const src = hasImage ? reference.previewUrl : hasVideo ? reference.mediaUrl : null;
+        const src = hasImage ? referenceThumbnailUrl(reference) : hasVideo ? reference.mediaUrl : null;
         if (preview && (preview.tagName !== tag || preview.className !== className || preview.getAttribute("src") !== src)) {
             preview.replaceWith(createInlinePreview(reference));
         }
@@ -891,12 +903,12 @@ function MentionReferenceList({ references, activeReferenceId, onSelect }: { ref
 }
 
 function ReferencePreview({ reference }: { reference: CanvasResourceReference }) {
-    if (reference.kind === "image" && reference.previewUrl) return <img src={reference.previewUrl} alt="" className="canvas-resource-mention-preview is-image" />;
-    if (reference.kind === "video" && reference.previewUrl) return <img src={reference.previewUrl} alt="" className="canvas-resource-mention-preview is-video" loading="lazy" decoding="async" />;
+    if (reference.kind === "image" && reference.previewUrl) return <img src={referenceThumbnailUrl(reference)} alt="" className="canvas-resource-mention-preview is-image" loading="lazy" decoding="async" />;
+    if (reference.kind === "video" && reference.previewUrl) return <img src={referenceThumbnailUrl(reference)} alt="" className="canvas-resource-mention-preview is-video" loading="lazy" decoding="async" />;
     if (reference.kind === "video" && reference.mediaUrl) {
         return <video src={reference.mediaUrl} aria-hidden="true" muted playsInline preload="metadata" className="canvas-resource-mention-preview is-video" onLoadedMetadata={(event) => primeVideoPreviewFrame(event.currentTarget)} />;
     }
-    if (reference.kind === "character" && reference.previewUrl) return <img src={reference.previewUrl} alt="" className="canvas-resource-mention-preview is-character" />;
+    if (reference.kind === "character" && reference.previewUrl) return <img src={referenceThumbnailUrl(reference)} alt="" className="canvas-resource-mention-preview is-character" loading="lazy" decoding="async" />;
     if (reference.kind === "skill") {
         return (
             <span className="canvas-resource-mention-preview is-skill">
