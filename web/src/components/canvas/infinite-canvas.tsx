@@ -15,6 +15,7 @@ type InfiniteCanvasProps = {
     backgroundMode?: CanvasBackgroundMode;
     onViewportChange: (viewport: ViewportTransform) => void;
     onViewportPreviewChange?: (viewport: ViewportTransform) => void;
+    autoPanActive?: boolean;
     onCanvasMouseDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
     boxSelectEnabled?: boolean;
     onCanvasDoubleClick?: (event: React.MouseEvent<HTMLDivElement>) => void;
@@ -45,7 +46,7 @@ type PinchState = {
     initialScale: number;
 };
 
-export function InfiniteCanvas({ interactive = true, containerRef, viewport, appearance, backgroundMode = "lines", onViewportChange, onViewportPreviewChange, onCanvasMouseDown, boxSelectEnabled = false, onCanvasDoubleClick, onCanvasDeselect, onContextMenu, onDrop, onFileDragEnter, onFileDragLeave, onFileDragOver, graphicsLayer, children }: InfiniteCanvasProps) {
+export function InfiniteCanvas({ interactive = true, containerRef, viewport, appearance, backgroundMode = "lines", onViewportChange, onViewportPreviewChange, autoPanActive = false, onCanvasMouseDown, boxSelectEnabled = false, onCanvasDoubleClick, onCanvasDeselect, onContextMenu, onDrop, onFileDragEnter, onFileDragLeave, onFileDragOver, graphicsLayer, children }: InfiniteCanvasProps) {
     const colorTheme = useActiveTheme();
     const resolvedAppearance = resolveCanvasAppearance(appearance, colorTheme);
     const panState = useRef({
@@ -70,6 +71,14 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
     const spacePressedRef = useRef(false);
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [isPanning, setIsPanning] = useState(false);
+    const autoPanActiveRef = useRef(autoPanActive);
+    const autoPanPointerRef = useRef({ x: 0, y: 0 });
+    const autoPanFrameRef = useRef<number | null>(null);
+    const autoPanStartedRef = useRef(false);
+
+    useEffect(() => {
+        autoPanActiveRef.current = autoPanActive;
+    }, [autoPanActive]);
 
     useLayoutEffect(() => {
         if (interactive) return;
@@ -111,12 +120,57 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
     useEffect(
         () => () => {
             if (frameRef.current) cancelAnimationFrame(frameRef.current);
+            if (autoPanFrameRef.current) cancelAnimationFrame(autoPanFrameRef.current);
             if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
             delete containerRef.current?.dataset.canvasViewportInteracting;
             document.body.style.cursor = "";
         },
         [containerRef],
     );
+
+    useEffect(() => {
+        if (!interactive) return;
+        const edge = 56;
+        const maxSpeed = 18;
+        const tick = () => {
+            autoPanFrameRef.current = null;
+            if (!autoPanActiveRef.current) return;
+            const container = containerRef.current;
+            const rect = container?.getBoundingClientRect();
+            if (!rect) return;
+            const { x, y } = autoPanPointerRef.current;
+            const distance = (value: number, start: number, end: number) => value < start + edge ? value - (start + edge) : value > end - edge ? value - (end - edge) : 0;
+            const edgeX = distance(x, rect.left, rect.right);
+            const edgeY = distance(y, rect.top, rect.bottom);
+            if (!edgeX && !edgeY) return;
+            const speed = (value: number) => Math.sign(value) * Math.min(maxSpeed, Math.max(2, Math.abs(value) * 0.28));
+            const next = { x: viewportRef.current.x - speed(edgeX), y: viewportRef.current.y - speed(edgeY), k: viewportRef.current.k };
+            autoPanStartedRef.current = true;
+            viewportRef.current = next;
+            scaleRef.current = next.k;
+            onViewportPreviewChange?.(next);
+            applyCanvasLiveViewport(container, next);
+            autoPanFrameRef.current = window.requestAnimationFrame(tick);
+        };
+        const handlePointerMove = (event: PointerEvent) => {
+            if (!autoPanActiveRef.current) return;
+            autoPanPointerRef.current = { x: event.clientX, y: event.clientY };
+            if (autoPanFrameRef.current === null) autoPanFrameRef.current = window.requestAnimationFrame(tick);
+        };
+        const handlePointerUp = () => {
+            if (!autoPanStartedRef.current) return;
+            autoPanStartedRef.current = false;
+            onViewportChange(viewportRef.current);
+        };
+        window.addEventListener("pointermove", handlePointerMove);
+        window.addEventListener("pointerup", handlePointerUp);
+        return () => {
+            window.removeEventListener("pointermove", handlePointerMove);
+            window.removeEventListener("pointerup", handlePointerUp);
+            if (autoPanFrameRef.current) window.cancelAnimationFrame(autoPanFrameRef.current);
+            autoPanFrameRef.current = null;
+        };
+    }, [containerRef, interactive, onViewportChange, onViewportPreviewChange]);
 
     const syncViewport = useCallback(() => { if (interactive) onViewportChange(viewportRef.current); }, [interactive, onViewportChange]);
 

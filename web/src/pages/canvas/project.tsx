@@ -76,7 +76,7 @@ import { STORYBOARD_HEADER_HEIGHT, STORYBOARD_ROW_HEIGHT, storyboardMinNodeHeigh
 import { CanvasDirectorNodePanel } from "@/components/canvas/director/canvas-director-node-panel";
 import { CanvasVersionCompareModal } from "@/components/canvas/canvas-version-compare-modal";
 import { useFocusMode } from "@/hooks/use-focus-mode";
-import { connectCanvasTextMention } from "@/lib/canvas/canvas-text-mention";
+import { connectCanvasResourceMention } from "@/lib/canvas/canvas-text-mention";
 import { writeCanvasNodePrompt } from "@/lib/canvas/canvas-node-prompt";
 import {
     applyCanvasConnectionPromptSync,
@@ -2176,13 +2176,13 @@ function InfiniteCanvasPage() {
                     isRunning={isCanvasNodeGenerating(panelNode, runningNodeId)}
                     mentionReferences={[
                         ...(mentionReferencesByNodeId.get(panelNode.id) || EMPTY_RESOURCE_REFERENCES),
-                        ...buildCanvasResourceReferences(nodesRef.current, connectionsRef.current).filter((reference) => reference.kind === "text" && reference.nodeId !== panelNode.id && !(mentionReferencesByNodeId.get(panelNode.id) || []).some((active) => active.nodeId === reference.nodeId)),
+                        ...buildCanvasResourceReferences(nodesRef.current, connectionsRef.current).filter((reference) => reference.nodeId !== panelNode.id && !(mentionReferencesByNodeId.get(panelNode.id) || []).some((active) => active.nodeId === reference.nodeId)),
                     ]}
                     onAddReference={(nodeId, reference) => {
                         if (reference.active || reference.assetId || reference.kind === "skill") return reference;
-                        if (reference.kind !== "text" || !reference.nodeId || reference.nodeId === nodeId) return undefined;
+                        if (!reference.nodeId || reference.nodeId === nodeId) return undefined;
                         try {
-                            const linked = connectCanvasTextMention(nodesRef.current, connectionsRef.current, nodeId, reference.nodeId, nanoid());
+                            const linked = connectCanvasResourceMention(nodesRef.current, connectionsRef.current, nodeId, reference.nodeId, nanoid());
                             nodesRef.current = linked.nodes;
                             connectionsRef.current = linked.connections;
                             setNodes(linked.nodes);
@@ -2648,6 +2648,7 @@ function InfiniteCanvasPage() {
                                     }
                                     onViewportChange={handleViewportChange}
                                     onViewportPreviewChange={handleViewportPreviewChange}
+                                    autoPanActive={isNodeDragging || Boolean(connectingParams) || Boolean(batchConnectionPreview)}
                                     onCanvasMouseDown={handleCanvasMouseDown}
                                     boxSelectEnabled={canvasTool === "box-select"}
                                     onCanvasDoubleClick={handleCanvasDoubleClick}

@@ -267,7 +267,9 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
 
     const insertAutoLink = (match: CanvasResourceAutoLinkMatch) => {
         const currentValue = editorRef.current ? serializeEditableValue(editorRef.current) : value;
-        const insertText = `${canvasResourceMentionToken(match.reference)} `;
+        const selected = onSelectReference ? onSelectReference(match.reference) : match.reference;
+        if (!selected) return;
+        const insertText = `${canvasResourceMentionToken(selected)} `;
         const next = `${currentValue.slice(0, match.start)}${insertText}${currentValue.slice(match.end)}`;
         updateValue(next, match.start + insertText.length);
         setAutoLinkCursor(match.start + insertText.length);
@@ -332,6 +334,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         <MentionMenu
             anchor={menuAnchor}
             connectedReferences={activeMentionCanvasReferences}
+            canvasReferences={mentionCanvasReferences}
             assetReferences={assetReferences}
             filteredReferences={candidates}
             query={mention.query}
@@ -710,9 +713,10 @@ function syncInlineMentionPreviews(editor: HTMLElement, references: CanvasResour
     });
 }
 
-function MentionMenu({ anchor, connectedReferences, assetReferences, filteredReferences, query, cursorOffset, activeReferenceId, preferredWidth, onQueryChange, onClose, onSelect }: {
+function MentionMenu({ anchor, connectedReferences, canvasReferences, assetReferences, filteredReferences, query, cursorOffset, activeReferenceId, preferredWidth, onQueryChange, onClose, onSelect }: {
     anchor: HTMLElement;
     connectedReferences: CanvasResourceReference[];
+    canvasReferences: CanvasResourceReference[];
     assetReferences: CanvasResourceReference[];
     filteredReferences: CanvasResourceReference[];
     query: string;
@@ -758,7 +762,7 @@ function MentionMenu({ anchor, connectedReferences, assetReferences, filteredRef
     const categoryItems = Object.entries(ASSET_CATEGORY_LABELS)
         .map(([value, label]) => ({ value: value as AssetCategory, label, count: assetReferences.filter((item) => item.category === value).length }))
         .filter((item) => item.count > 0);
-    const connectedNodes = connectedReferences.filter((item) => item.kind !== "skill");
+    const canvasNodes = canvasReferences.filter((item) => item.kind !== "skill");
     const skillReferences = connectedReferences.filter((item) => item.kind === "skill");
     const visibleReferences = query
         ? filteredReferences
@@ -823,10 +827,10 @@ function MentionMenu({ anchor, connectedReferences, assetReferences, filteredRef
                     </>
                 ) : (
                     <>
-                        {connectedNodes.length ? (
+                        {canvasNodes.length ? (
                             <section className="canvas-resource-mention-section">
-                                <h4><span>画布节点</span><small>{connectedNodes.length}</small></h4>
-                                <MentionReferenceList references={connectedNodes} activeReferenceId={activeReferenceId} onSelect={selectReference} />
+                                <h4><span>本画布中的</span><small>{canvasNodes.length}</small></h4>
+                                <MentionReferenceList references={canvasNodes} activeReferenceId={activeReferenceId} onSelect={selectReference} />
                             </section>
                         ) : null}
                         {skillReferences.length ? (
@@ -877,7 +881,7 @@ function MentionReferenceList({ references, activeReferenceId, onSelect }: { ref
         >
             <ReferencePreview reference={reference} />
             <span className="canvas-resource-mention-copy">
-                <span className="canvas-resource-mention-title-row"><strong title={reference.label}>{reference.label}</strong>{reference.kind === "skill" ? <em>技能</em> : null}</span>
+                <span className="canvas-resource-mention-title-row"><strong title={reference.kind === "skill" ? reference.label : reference.title || reference.label}>{reference.kind === "skill" ? reference.label : reference.title || reference.label}</strong>{reference.kind === "skill" ? <em>技能</em> : null}</span>
                 {reference.kind === "skill" ? (
                     <span className="canvas-resource-mention-meta"><span>{reference.skill?.description || reference.text || "工作流技能"}</span><small>{reference.skill?.version ? `v${reference.skill.version}` : ""}{reference.skill?.fileCount ? ` · ${reference.skill.fileCount} 文件` : ""}</small></span>
                 ) : reference.text && reference.text !== reference.title ? <span className="canvas-resource-mention-meta"><span>{reference.text}</span></span> : null}
