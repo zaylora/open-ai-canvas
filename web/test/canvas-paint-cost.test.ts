@@ -53,7 +53,8 @@ describe("连线层不再用布局属性跟随视口", () => {
         expect(bounds).not.toContain("viewport.y");
         expect(bounds).not.toContain("viewport.k");
         expect(bounds).not.toContain("viewportSize");
-        expect(bounds.trimEnd().endsWith("}, [displayConnections]);")).toBe(true);
+        // dragPreview 是下一条用例那个“冻结布局盒子”的依赖，不是视口量，留在这里不违反本用例的意图。
+        expect(bounds.trimEnd().endsWith("}, [displayConnections, dragPreview]);")).toBe(true);
     });
 
     test("节点拖拽期间冻结 SVG 布局盒子", () => {
@@ -101,15 +102,26 @@ describe("图形层不再逐帧强制同步布局", () => {
 
 describe("连线跟随世界层，不靠视口大小的 canvas", () => {
     const worldLayersSource = readFileSync(resolve(import.meta.dir, "../src/pages/canvas/canvas-project-world-layers.tsx"), "utf8");
+    const connectionsSource = readFileSync(resolve(import.meta.dir, "../src/components/canvas/canvas-connections.tsx"), "utf8");
 
-    test("常态由世界层 SVG 画可见连线，拖节点时才交给 Leafer", () => {
-        expect(worldLayersSource).toContain('visualMode={props.isNodeDragging ? "hover-only" : "full"}');
-        expect(worldLayersSource).toContain("hideVisual={props.isNodeDragging}");
+    test("连线全程由世界层 SVG 画，不切换渲染介质", () => {
+        // 曾经常态走 SVG、拖节点切 Leafer canvas。两层即便逐像素对齐，接管那一帧仍留下可见跳变，
+        // 按一下节点就能看到整块画布的连线闪一次。这两个开关是那套切换的残留，不能回来。
+        expect(worldLayersSource).toContain("<CanvasConnectionLayer");
+        expect(connectionsSource).not.toContain("visualMode");
+        expect(connectionsSource).not.toContain("hideVisual");
     });
 
-    test("Leafer 连线层默认隐藏，只在拖节点时显示", () => {
-        expect(leaferLayerSource).toContain('underlay.host.style.visibility = preview ? "visible" : "hidden";');
-        expect(leaferLayerSource).toContain('data-canvas-leafer-underlay className="pointer-events-none absolute inset-0 z-0 overflow-hidden" style={{ visibility: "hidden" }}');
+    test("拖节点时 SVG 自己逐帧改 d，命中区跟着一起动", () => {
+        expect(connectionsSource).toContain("subscribeCanvasNodeDragPreview(container,");
+        expect(connectionsSource).toContain('target.visual?.setAttribute("d", pathD);');
+        // 命中区不跟着改，松手前指针判定会停在旧位置
+        expect(connectionsSource).toContain('target.hit?.setAttribute("d", pathD);');
+    });
+
+    test("Leafer 图形层只剩浮层，不再画连线", () => {
+        expect(leaferLayerSource).not.toContain("underlay");
+        expect(leaferLayerSource).not.toContain("rebuildConnections");
     });
 });
 

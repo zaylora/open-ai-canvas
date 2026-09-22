@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { Link2 } from "lucide-react";
 
-import { ConnectionPath } from "@/components/canvas/canvas-connections";
+import { CanvasConnectionLayer } from "@/components/canvas/canvas-connections";
 import { CanvasFrameNode } from "@/components/canvas/canvas-frame-node";
 import { CanvasNode } from "@/components/canvas/canvas-node";
 import type { CanvasConnectionApproach } from "@/lib/canvas/canvas-connection-tilt";
@@ -16,6 +16,7 @@ type NodeBounds = { left: number; top: number; width: number; height: number; co
 
 type CanvasProjectWorldLayersProps = {
     projectId: string;
+    containerRef: RefObject<HTMLDivElement | null>;
     viewportScale: number;
     connectionLayerBounds: { left: number; top: number; width: number; height: number };
     displayConnections: CanvasDisplayConnection[];
@@ -107,32 +108,15 @@ export const CanvasProjectWorldLayers = memo(function CanvasProjectWorldLayers(p
     };
     return (
         <>
-            <svg
-                className="absolute overflow-visible"
-                viewBox={`${props.connectionLayerBounds.left} ${props.connectionLayerBounds.top} ${props.connectionLayerBounds.width} ${props.connectionLayerBounds.height}`}
-                style={{ left: props.connectionLayerBounds.left, top: props.connectionLayerBounds.top, width: props.connectionLayerBounds.width, height: props.connectionLayerBounds.height, pointerEvents: "none", zIndex: 0 }}
-            >
-                {props.displayConnections.map(({ connection, from, to }) => (
-                    <ConnectionPath
-                        key={connection.id}
-                        connection={connection}
-                        from={from}
-                        to={to}
-                        fromScrollTop={props.scriptScrollTopById[from.id] || 0}
-                        toScrollTop={props.scriptScrollTopById[to.id] || 0}
-                        active={props.selectedConnectionId === connection.id}
-                        // 常态由这层 SVG 画可见连线：它在世界层内，跟着同一个 transform 走，平移时
-                        // 不可能与节点错位。Leafer 的 canvas 只有视口大小，平移靠 CSS 推走整块画布，
-                        // 边缘会露出从未绘制的区域，连线就在那里消失——而 shouldRebaseCanvasRaster
-                        // 只看缩放比，平移时 ratio 恒为 1，永远不会触发重画。
-                        // 拖节点时反过来：SVG 退回只留命中区，位置交给 Leafer 逐帧同步。
-                        visualMode={props.isNodeDragging ? "hover-only" : "full"}
-                        hideVisual={props.isNodeDragging}
-                        onSelect={() => props.onConnectionSelect(connection.id)}
-                        onContextMenu={(event) => props.onConnectionContextMenu(event, connection.id)}
-                    />
-                ))}
-            </svg>
+            <CanvasConnectionLayer
+                containerRef={props.containerRef}
+                bounds={props.connectionLayerBounds}
+                displayConnections={props.displayConnections}
+                scriptScrollTopById={props.scriptScrollTopById}
+                selectedConnectionId={props.selectedConnectionId}
+                onSelect={props.onConnectionSelect}
+                onContextMenu={props.onConnectionContextMenu}
+            />
 
             {orderedVisibleNodes.map((node) =>
                 isFrameNode(node) ? (

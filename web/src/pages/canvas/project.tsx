@@ -2634,8 +2634,6 @@ function InfiniteCanvasPage() {
                                             containerRef={containerRef}
                                             viewport={viewport}
                                             theme={theme}
-                                            displayConnections={visibleDisplayConnections}
-                                            selectedConnectionId={selectedConnectionId}
                                             scriptScrollTopById={scriptScrollTopById}
                                             connectingParams={connectingParams}
                                             batchConnectionPreview={batchConnectionPreview}
@@ -2698,6 +2696,7 @@ function InfiniteCanvasPage() {
                                                 batchSourceNodeIds={batchSourceNodeIds}
                                                 batchConnectionPreview={batchConnectionPreview}
                                                 isNodeDragging={isNodeDragging}
+                                                containerRef={containerRef}
                                                 selectionBoundsElementRef={selectionBoundsElementRef}
                                                 renderCanvasNodeContent={renderCanvasNodeContent}
                                                 onConnectionSelect={(connectionId) => {

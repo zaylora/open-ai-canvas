@@ -1,11 +1,147 @@
-import React, { useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent, RefObject } from "react";
+
+import { subscribeCanvasNodeDragPreview, type CanvasNodeDragPreview } from "@/lib/canvas/canvas-live-viewport";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { STORYBOARD_HEADER_HEIGHT, STORYBOARD_ROW_HEIGHT, storyboardTableHeight } from "@/lib/canvas/canvas-storyboard-layout";
 import { batchReferenceHandleY } from "@/lib/canvas/canvas-batch-table";
-import type { CanvasConnection, CanvasNodeData, ConnectionHandle, Position } from "@/types/canvas";
+import type { CanvasConnection, CanvasDisplayConnection, CanvasNodeData, ConnectionHandle, Position } from "@/types/canvas";
+
+type ConnectionPathElements = { visual: SVGPathElement | null; hit: SVGPathElement | null };
+
+/**
+ * 连线层：常态和拖节点都由这一层 SVG 负责。
+ *
+ * 这里刻意不做渲染介质切换。之前常态走 SVG、拖节点切到 Leafer canvas，两层即便逐像素对齐，
+ * 接管的那一帧仍会留下可见跳变——按一下节点就能看到整块画布的连线闪一次。
+ * 现在改成拖拽时直接改受影响连线的 `d`：被拖节点连着的线通常只有个位数，
+ * 逐帧改这几条比整层 canvas 重绘更省，也没有切换可言。
+ */
+export function CanvasConnectionLayer({
+    containerRef,
+    bounds,
+    displayConnections,
+    scriptScrollTopById,
+    selectedConnectionId,
+    onSelect,
+    onContextMenu,
+}: {
+    containerRef: RefObject<HTMLDivElement | null>;
+    bounds: { left: number; top: number; width: number; height: number };
+    displayConnections: CanvasDisplayConnection[];
+    scriptScrollTopById: Record<string, number>;
+    selectedConnectionId: string | null;
+    onSelect: (connectionId: string) => void;
+    onContextMenu: (event: ReactMouseEvent<SVGPathElement>, connectionId: string) => void;
+}) {
+    const svgRef = useRef<SVGSVGElement>(null);
+    const connectionsRef = useRef(displayConnections);
+    connectionsRef.current = displayConnections;
+    const scrollTopRef = useRef(scriptScrollTopById);
+    scrollTopRef.current = scriptScrollTopById;
+
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+        // 一次拖拽只扫一遍 DOM：逐帧按 id 查询的成本会随画布连线总数线性上升。
+        let elements: Map<string, ConnectionPathElements> | null = null;
+        const touched = new Set<string>();
+
+        return subscribeCanvasNodeDragPreview(container, (preview) => {
+            if (!preview) {
+                // 位移不到拖拽阈值时不会提交新坐标，React 也就不会重渲染，
+                // 手动写进去的 d 必须自己还原，否则连线会停在偏移后的位置。
+                if (elements) writeDraggedConnectionPaths(elements, touched, connectionsRef.current, scrollTopRef.current, null);
+                elements = null;
+                touched.clear();
+                return;
+            }
+            if (!elements) elements = collectConnectionPathElements(svgRef.current);
+            writeDraggedConnectionPaths(elements, touched, connectionsRef.current, scrollTopRef.current, preview);
+        });
+    }, [containerRef]);
+
+    return (
+        <svg
+            ref={svgRef}
+            className="absolute overflow-visible"
+            viewBox={`${bounds.left} ${bounds.top} ${bounds.width} ${bounds.height}`}
+            style={{ left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height, pointerEvents: "none", zIndex: 0 }}
+        >
+            {displayConnections.map(({ connection, from, to }) => (
+                <ConnectionPath
+                    key={connection.id}
+                    connection={connection}
+                    from={from}
+                    to={to}
+                    fromScrollTop={scriptScrollTopById[from.id] || 0}
+                    toScrollTop={scriptScrollTopById[to.id] || 0}
+                    active={selectedConnectionId === connection.id}
+                    onSelect={() => onSelect(connection.id)}
+                    onContextMenu={(event) => onContextMenu(event, connection.id)}
+                />
+            ))}
+        </svg>
+    );
+}
+
+function collectConnectionPathElements(svg: SVGSVGElement | null) {
+    const elements = new Map<string, ConnectionPathElements>();
+    if (!svg) return elements;
+    const entryOf = (id: string) => {
+        const existing = elements.get(id);
+        if (existing) return existing;
+        const created: ConnectionPathElements = { visual: null, hit: null };
+        elements.set(id, created);
+        return created;
+    };
+    svg.querySelectorAll<SVGPathElement>("[data-connection-visual]").forEach((element) => {
+        const id = element.dataset.connectionVisual;
+        if (id) entryOf(id).visual = element;
+    });
+    svg.querySelectorAll<SVGPathElement>("[data-connection-id]").forEach((element) => {
+        const id = element.dataset.connectionId;
+        if (id) entryOf(id).hit = element;
+    });
+    return elements;
+}
+
+/**
+ * 把拖拽偏移写进受影响连线的两条路径。命中区要跟着一起改，
+ * 否则松手前指针判定还停在旧位置。`preview` 为空表示收尾，按提交坐标写回。
+ */
+function writeDraggedConnectionPaths(
+    elements: Map<string, ConnectionPathElements>,
+    touched: Set<string>,
+    connections: CanvasDisplayConnection[],
+    scriptScrollTopById: Record<string, number>,
+    preview: CanvasNodeDragPreview | null,
+) {
+    for (const { connection, from, to } of connections) {
+        const fromMoved = Boolean(preview?.nodeIds.has(from.id));
+        const toMoved = Boolean(preview?.nodeIds.has(to.id));
+        if (preview ? !fromMoved && !toMoved : !touched.has(connection.id)) continue;
+        const target = elements.get(connection.id);
+        if (!target) continue;
+        const { pathD } = canvasConnectionPath(
+            connection,
+            preview && fromMoved ? offsetConnectionNode(from, preview) : from,
+            preview && toMoved ? offsetConnectionNode(to, preview) : to,
+            scriptScrollTopById[from.id] || 0,
+            scriptScrollTopById[to.id] || 0,
+        );
+        target.visual?.setAttribute("d", pathD);
+        target.hit?.setAttribute("d", pathD);
+        if (preview) touched.add(connection.id);
+    }
+}
+
+function offsetConnectionNode(node: CanvasNodeData, preview: CanvasNodeDragPreview) {
+    if (preview.x === 0 && preview.y === 0) return node;
+    return { ...node, position: { x: node.position.x + preview.x, y: node.position.y + preview.y } };
+}
 
 export const ConnectionPath = React.memo(function ConnectionPath({
     connection,
@@ -14,8 +150,6 @@ export const ConnectionPath = React.memo(function ConnectionPath({
     fromScrollTop = 0,
     toScrollTop = 0,
     active,
-    visualMode = "full",
-    hideVisual = false,
     onSelect,
     onContextMenu,
 }: {
@@ -25,8 +159,6 @@ export const ConnectionPath = React.memo(function ConnectionPath({
     fromScrollTop?: number;
     toScrollTop?: number;
     active: boolean;
-    visualMode?: "full" | "hover-only";
-    hideVisual?: boolean;
     onSelect: () => void;
     onContextMenu?: (event: ReactMouseEvent<SVGPathElement>) => void;
 }) {
@@ -34,7 +166,6 @@ export const ConnectionPath = React.memo(function ConnectionPath({
     const [hovered, setHovered] = useState(false);
     const { pathD } = canvasConnectionPath(connection, from, to, fromScrollTop, toScrollTop);
     const emphasized = active || hovered;
-    const showVisual = !hideVisual && (visualMode === "full" || hovered);
     const markerId = `canvas-connection-arrow-${connection.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
     return (
@@ -64,7 +195,8 @@ export const ConnectionPath = React.memo(function ConnectionPath({
                     onContextMenu?.(event);
                 }}
             />
-            {showVisual ? <path
+            <path
+                data-connection-visual={connection.id}
                 d={pathD}
                 stroke={theme.node.muted}
                 strokeWidth={emphasized ? 2.8 : 2}
@@ -75,10 +207,10 @@ export const ConnectionPath = React.memo(function ConnectionPath({
                 strokeLinejoin="round"
                 markerEnd={`url(#${markerId})`}
                 style={{ pointerEvents: "none" }}
-            /> : null}
+            />
         </g>
     );
-}, (previous, next) => previous.connection === next.connection && previous.from === next.from && previous.to === next.to && previous.active === next.active && previous.visualMode === next.visualMode && previous.hideVisual === next.hideVisual && previous.fromScrollTop === next.fromScrollTop && previous.toScrollTop === next.toScrollTop);
+}, (previous, next) => previous.connection === next.connection && previous.from === next.from && previous.to === next.to && previous.active === next.active && previous.fromScrollTop === next.fromScrollTop && previous.toScrollTop === next.toScrollTop);
 
 export function canvasConnectionPath(connection: CanvasConnection, from: CanvasNodeData, to: CanvasNodeData, fromScrollTop = 0, toScrollTop = 0) {
     const startX = from.position.x + from.width;

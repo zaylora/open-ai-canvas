@@ -2687,3 +2687,26 @@ pointermove
 - [ ] 不同缩放档位下草稿线粗细和虚线节距稳定，放大缩小不跳变。
 
 本地验证记录：`web` 下 `tsc --noEmit` 通过；`bun test test/canvas-connection-tilt.test.ts test/canvas-connection-visibility.test.ts test/canvas-batch-connection.test.ts test/canvas-connected-node-placement.test.ts` 22 项通过。未启动 dev server，未做浏览器验收。
+
+## 画布连线不再切换渲染介质
+
+选中或拖动节点时，整块画布的连线会闪一下。根因不是样式，而是连线一直有两套渲染介质：常态由世界层 SVG 画，按下节点的同一帧切换到 Leafer underlay 的 canvas 接管，松手再切回来。`setIsNodeDragging(true)` 在 pointerdown 就置位，所以单击选中也会完整走一遍切换。
+
+排查确认了这不是两层画得不一样：把两层样式逐项对齐（线不透明度 0.8→0.9、箭头不透明度 0.9→1、箭头几何从 9×10 改成与 SVG marker 一致的 10×8、选中态不再换主色）之后仍然闪；静态强制两层同时可见做叠加对比，几乎看不出差别。也就是说，可见跳变来自"切换"这个动作本身。
+
+现在取消切换：连线全程由世界层的 SVG 负责。新增 `CanvasConnectionLayer` 订阅 `canvas:node-drag-preview`，拖节点时只挑 `from` 或 `to` 在被拖节点集合里的连线，直接改它们的 `d`；可见路径和 16px 命中区一起改，否则松手前指针判定会停在旧位置。一次拖拽只扫一遍 DOM 建索引，不逐帧 `querySelector`；松手时按提交坐标写回，覆盖位移不足拖拽阈值、不触发 `setNodes` 因而 React 不重渲染的情况。箭头由 `markerEnd` 自己跟随路径末端，不需要单独同步。
+
+Leafer 图形层随之只剩浮层职责（框选框、选中边界、连线草稿、对齐参考线），`UnderlayScene` 及 `rebuildConnections` / `syncConnectionPath` / `applyConnectionDragPreview` 等整套连线绘制代码移除，该文件从 536 行降到 370 行。`ConnectionPath` 上为切换而生的 `visualMode` / `hideVisual` 两个参数一并删除。
+
+待真实画布验收：
+
+- [ ] 单击选中节点、按下不移动、按下并拖动，三种情况下全画布连线都不出现闪烁或加粗。
+- [ ] 拖动单个节点时相连的连线跟手，端点始终贴在节点边缘中点。
+- [ ] 多选拖动、拖动 Frame 带子节点、拖动批量表根节点时，所有受影响连线同步跟手。
+- [ ] 分镜脚本节点的多端口连线（`row:` 句柄）在拖动和表格滚动后仍接在正确的行上。
+- [ ] 拖动中途按 Esc 取消、以及位移不足 3px 的点击，松手后连线回到正确位置，不残留偏移。
+- [ ] 松手后立刻在连线上右键或单击，命中区与可见连线位置一致。
+- [ ] 不同缩放档位下线宽稳定；明暗主题切换后连线颜色正确。
+- [ ] 密集连线画布（数百条）拖动高连接度节点时的帧率不低于改动前——canvas 原本每帧重画全部连线，SVG 改为只更新受影响的几条，理论上占优但未实测。
+
+本地验证记录：`web` 下 `tsc --noEmit` 与 `eslint src test` 通过；`bun test test/canvas-batch-connection.test.ts test/canvas-leafer-viewport.test.ts test/canvas-paint-cost.test.ts test/canvas-selection.test.ts test/canvas-spatial-index.test.ts` 51 项通过。`canvas-paint-cost` 中锁定旧架构的两条断言改为保护新的不变量（连线不切换介质、拖拽期命中区跟着改、图形层不再画连线）；另修复该文件一条改动前就已失效的断言——`connectionLayerBounds` 的依赖早已是 `[displayConnections, dragPreview]`，断言仍写 `[displayConnections]`。使用者已确认按下节点不再闪烁且连线跟手，其余场景未启动 dev server 验收。
