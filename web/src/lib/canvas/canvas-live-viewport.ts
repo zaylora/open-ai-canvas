@@ -29,11 +29,14 @@ export type CanvasNodeSelectionPreview = {
 
 const nodeDragPreviewDomStates = new WeakMap<HTMLDivElement, NodeDragPreviewDomState>();
 const nodeSelectionPreviewDomStates = new WeakMap<HTMLDivElement, NodeSelectionPreviewDomState>();
-const liveViewportElements = new WeakMap<HTMLDivElement, {
-    worldLayer: HTMLElement | null;
-    liveScale?: number;
-    liveInverseScale?: number;
-}>();
+const liveViewportElements = new WeakMap<
+    HTMLDivElement,
+    {
+        worldLayer: HTMLElement | null;
+        liveScale?: number;
+        liveInverseScale?: number;
+    }
+>();
 
 export function applyCanvasLiveViewport(container: HTMLDivElement | null, viewport: ViewportTransform, notify = true) {
     if (!container) return;
