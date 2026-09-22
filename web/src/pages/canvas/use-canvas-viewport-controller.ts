@@ -106,6 +106,13 @@ export function useCanvasViewportController({
         return { x: (localX - viewport.x) / viewport.k, y: (localY - viewport.y) / viewport.k };
     }, [viewportRef]);
 
+    const refreshCanvasRect = useCallback(() => {
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        canvasRectRef.current = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    }, [containerRef]);
+
     const getCanvasCenter = useCallback(() => {
         const rect = canvasRectRef.current;
         return screenToCanvas((rect?.left || 0) + (rect?.width || size.width) / 2, (rect?.top || 0) + (rect?.height || size.height) / 2);
@@ -203,6 +210,7 @@ export function useCanvasViewportController({
         handleViewportChange,
         handleViewportPreviewChange,
         previewViewport,
+        refreshCanvasRect,
         screenToCanvas,
         setZoomScale,
         zoomCanvasIn,

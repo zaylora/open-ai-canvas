@@ -2671,3 +2671,19 @@ pointermove
 - [ ] 触控板平移、鼠标拖动画布和缩放后拖拽均保持流畅。
 
 本地验证记录：`git diff --check` 通过。专项测试未能得到有效结果：项目 `pretest` 会递归触发 Bun 测试，在当前 Windows 环境中出现 `AssignProcessToJobObject` 错误；当前工作区也没有可用的 `tsc` 本地二进制，因此未完成 TypeScript 类型检查。未启动 dev server，未做浏览器验收。
+
+## 画布连线草稿末端跟手
+
+拖出连线时草稿末端存的是世界坐标，只有 `pointermove` 会重算；而 `InfiniteCanvas` 的边缘自动平移在自己的 rAF 里逐帧改视口、不产生指针事件。指针停在边缘时，草稿线会以自动平移的速度离开指针，偏移一直累积到数百像素。落点判定按抬手时的真实指针位置重算，所以只有预览错位，连出来的线是对的。
+
+现在 `use-canvas-connection-controller` 订阅 `canvas:graphics-viewport-preview`，视口每变一次就用最后一次指针屏幕坐标重算草稿末端、落点目标和倾斜锁定；`elementFromPoint` 的引用替换高亮只在真实指针移动时更新，避免自动平移每帧强制同步布局。同时移除上一版的双 rAF：它把指针转换推迟两帧，并没有对齐自动平移，只是让草稿更晚跟手。另外修掉 Leafer overlay 中草稿线线宽被 `syncViewport` 和 `syncOverlayContent` 两处互相覆盖的问题。
+
+待真实画布验收：
+
+- [ ] 从节点输出点拖线到画布边缘触发自动平移，指针停住不动，草稿末端始终钉在指针上，不再越飘越远。
+- [ ] 自动平移期间画布内容滑到指针下方时，吸附高亮和落点提示跟着更新；抬手连出的连线与松手位置一致。
+- [ ] 连线拖拽中用触控板平移或滚轮缩放画布，草稿线仍跟手。
+- [ ] 批量连线（多选后拖出）在上述场景下同样跟手。
+- [ ] 不同缩放档位下草稿线粗细和虚线节距稳定，放大缩小不跳变。
+
+本地验证记录：`web` 下 `tsc --noEmit` 通过；`bun test test/canvas-connection-tilt.test.ts test/canvas-connection-visibility.test.ts test/canvas-batch-connection.test.ts test/canvas-connected-node-placement.test.ts` 22 项通过。未启动 dev server，未做浏览器验收。

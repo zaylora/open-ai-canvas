@@ -680,6 +680,7 @@ function InfiniteCanvasPage() {
         handleViewportChange,
         handleViewportPreviewChange,
         previewViewport,
+        refreshCanvasRect,
         screenToCanvas,
         setZoomScale,
         zoomCanvasIn,
@@ -1101,10 +1102,12 @@ function InfiniteCanvasPage() {
         projectId,
         config: effectiveConfig,
         defaultDrawingEngine,
+        containerRef,
         nodesRef,
         connectionsRef,
         viewportRef,
         scriptScrollTopById,
+        refreshCanvasRect,
         screenToCanvas,
         setNodes,
         setConnections,
@@ -2633,7 +2636,6 @@ function InfiniteCanvasPage() {
                                             theme={theme}
                                             displayConnections={visibleDisplayConnections}
                                             selectedConnectionId={selectedConnectionId}
-                                            relatedConnectionIds={relatedHighlight.connectionIds}
                                             scriptScrollTopById={scriptScrollTopById}
                                             connectingParams={connectingParams}
                                             batchConnectionPreview={batchConnectionPreview}
@@ -2668,7 +2670,6 @@ function InfiniteCanvasPage() {
                                                 connectionLayerBounds={connectionLayerBounds}
                                                 displayConnections={visibleDisplayConnections}
                                                 selectedConnectionId={selectedConnectionId}
-                                                relatedConnectionIds={relatedHighlight.connectionIds}
                                                 scriptScrollTopById={scriptScrollTopById}
                                                 connectingParams={connectingParams}
                                                 mouseWorld={mouseWorld}

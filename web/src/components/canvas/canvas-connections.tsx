@@ -32,40 +32,18 @@ export const ConnectionPath = React.memo(function ConnectionPath({
 }) {
     const theme = canvasThemes[useActiveTheme()];
     const [hovered, setHovered] = useState(false);
-    const { pathD, startX, startY, endX, endY } = canvasConnectionPath(connection, from, to, fromScrollTop, toScrollTop);
+    const { pathD } = canvasConnectionPath(connection, from, to, fromScrollTop, toScrollTop);
     const emphasized = active || hovered;
     const showVisual = !hideVisual && (visualMode === "full" || hovered);
-    const showEmphasis = !hideVisual && emphasized;
-    const gradientId = `canvas-flow-${connection.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+    const markerId = `canvas-connection-arrow-${connection.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
     return (
         <g>
-            {showEmphasis ? <defs>
-                <linearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1={startX} y1={startY} x2={endX} y2={endY}>
-                    <stop offset="0%" stopColor={theme.node.muted} stopOpacity={0.18} />
-                    <stop offset="48%" stopColor={theme.accent.primary} stopOpacity={0.58} />
-                    <stop offset="100%" stopColor={theme.accent.primary} stopOpacity={0.34} />
-                </linearGradient>
-                {/* 流光头部的软化渐变：两端透明、中间亮，避免短划线看起来是硬色块 */}
-                <linearGradient id={`${gradientId}-comet`} x1="0" y1="0" x2="1" y2="0">
-                    <stop offset="0%" stopColor={theme.accent.primary} stopOpacity={0} />
-                    <stop offset="45%" stopColor={theme.accent.primary} stopOpacity={0.95} />
-                    <stop offset="100%" stopColor={theme.accent.primary} stopOpacity={0} />
-                </linearGradient>
-            </defs> : null}
-            {/* 光晕：只在强调态渲染。blur 是 filter，成本随线条数量线性上升，
-                常态几十条线全开会明显掉帧，所以刻意只给悬停/选中的那一条。
-                垫在底衬描边之下，不改动常态可读性那几层。 */}
-            {showEmphasis ? <path
-                d={pathD}
-                stroke={theme.accent.primary}
-                strokeWidth="8"
-                vectorEffect="non-scaling-stroke"
-                strokeOpacity={0.18}
-                fill="none"
-                strokeLinecap="round"
-                style={{ pointerEvents: "none", filter: "blur(3px)" }}
-            /> : null}
+            <defs>
+                <marker id={markerId} markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                    <path d="M 0 0 L 10 4 L 0 8 Z" fill={theme.node.muted} />
+                </marker>
+            </defs>
             <path
                 data-connection-id={connection.id}
                 d={pathD}
@@ -89,53 +67,13 @@ export const ConnectionPath = React.memo(function ConnectionPath({
             {showVisual ? <path
                 d={pathD}
                 stroke={theme.node.muted}
-                strokeWidth={emphasized ? 5 : 3.5}
-                vectorEffect="non-scaling-stroke"
-                strokeOpacity={emphasized ? 0.18 : 0.16}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{ pointerEvents: "none" }}
-            /> : null}
-            {showVisual ? <path
-                d={pathD}
-                stroke={emphasized ? theme.accent.primary : theme.node.muted}
                 strokeWidth={emphasized ? 2.8 : 2}
                 vectorEffect="non-scaling-stroke"
-                strokeOpacity={emphasized ? 0.95 : 0.8}
+                strokeOpacity={0.9}
                 fill="none"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                style={{ pointerEvents: "none" }}
-            /> : null}
-            {showVisual ? <>
-                <circle cx={startX} cy={startY} r={emphasized ? 3.5 : 2.5} fill={emphasized ? theme.accent.primary : theme.node.muted} fillOpacity={emphasized ? 0.9 : 0.72} vectorEffect="non-scaling-stroke" style={{ pointerEvents: "none" }} />
-                <circle cx={endX} cy={endY} r={emphasized ? 3.5 : 2.5} fill={emphasized ? theme.accent.primary : theme.node.muted} fillOpacity={emphasized ? 0.9 : 0.72} vectorEffect="non-scaling-stroke" style={{ pointerEvents: "none" }} />
-            </> : null}
-            {showVisual && emphasized ? <path
-                className="canvas-connection-flow"
-                d={pathD}
-                stroke={`url(#${gradientId})`}
-                strokeWidth="2.2"
-                vectorEffect="non-scaling-stroke"
-                strokeOpacity="0.84"
-                strokeDasharray="18 26"
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{ pointerEvents: "none" }}
-            /> : null}
-            {/* 流光：一小段高亮沿路径跑。周期与虚线流动刻意不同（2.1s vs 1.25s），
-                两者错拍才像有光在走；同频会锁成一条整体平移的虚线。 */}
-            {showEmphasis ? <path
-                className="canvas-connection-comet"
-                d={pathD}
-                stroke={`url(#${gradientId}-comet)`}
-                strokeWidth="2.6"
-                vectorEffect="non-scaling-stroke"
-                strokeDasharray="16 118"
-                fill="none"
-                strokeLinecap="round"
+                markerEnd={`url(#${markerId})`}
                 style={{ pointerEvents: "none" }}
             /> : null}
         </g>

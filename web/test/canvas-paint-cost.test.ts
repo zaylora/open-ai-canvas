@@ -63,11 +63,12 @@ describe("连线层不再用布局属性跟随视口", () => {
 });
 
 describe("坐标转换热路径不读取布局", () => {
-    test("screenToCanvas 使用 ResizeObserver 缓存的画布矩形", () => {
+    test("screenToCanvas 使用缓存矩形，连线交互开始前主动刷新", () => {
         const screenToCanvas = viewportControllerSource.match(/const screenToCanvas = useCallback\([\s\S]*?\n    \}, \[viewportRef\]\);/)?.[0] || "";
         expect(screenToCanvas).toContain("const rect = canvasRectRef.current;");
         expect(screenToCanvas).not.toContain("getBoundingClientRect");
         expect(viewportControllerSource).toContain("const resizeObserver = new ResizeObserver(updateRect);");
+        expect(viewportControllerSource).toContain("const refreshCanvasRect = useCallback");
     });
 });
 

@@ -20,7 +20,6 @@ type CanvasProjectWorldLayersProps = {
     connectionLayerBounds: { left: number; top: number; width: number; height: number };
     displayConnections: CanvasDisplayConnection[];
     selectedConnectionId: string | null;
-    relatedConnectionIds: Set<string>;
     scriptScrollTopById: Record<string, number>;
     connectingParams: ConnectionHandle | null;
     mouseWorld: Position;
@@ -121,7 +120,7 @@ export const CanvasProjectWorldLayers = memo(function CanvasProjectWorldLayers(p
                         to={to}
                         fromScrollTop={props.scriptScrollTopById[from.id] || 0}
                         toScrollTop={props.scriptScrollTopById[to.id] || 0}
-                        active={props.selectedConnectionId === connection.id || props.relatedConnectionIds.has(connection.id)}
+                        active={props.selectedConnectionId === connection.id}
                         // 常态由这层 SVG 画可见连线：它在世界层内，跟着同一个 transform 走，平移时
                         // 不可能与节点错位。Leafer 的 canvas 只有视口大小，平移靠 CSS 推走整块画布，
                         // 边缘会露出从未绘制的区域，连线就在那里消失——而 shouldRebaseCanvasRaster

@@ -13,6 +13,7 @@ import { attachNodeToStoryboardRow, createCanvasNode, getConnectionTargetAnchor,
 import { createCanvasDrawingFromImage } from "@/lib/canvas/canvas-drawing-storage";
 import { isDrawingEngineAvailable, type CanvasDrawingEngine } from "@/lib/canvas/canvas-drawing-engine";
 import { isFrameNode, isNodeHiddenByCollapsedFrame } from "@/lib/canvas/canvas-frame";
+import { subscribeCanvasGraphicsViewportPreview } from "@/lib/canvas/canvas-live-viewport";
 import { normalizeRunningHubCapability, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type ConnectionHandle, type ContextMenuState, type Position, type ViewportTransform } from "@/types/canvas";
@@ -23,10 +24,12 @@ type UseCanvasConnectionControllerOptions = {
     projectId: string;
     config: AiConfig;
     defaultDrawingEngine: CanvasDrawingEngine;
+    containerRef: { current: HTMLDivElement | null };
     nodesRef: { current: CanvasNodeData[] };
     connectionsRef: { current: CanvasConnection[] };
     viewportRef: { current: ViewportTransform };
     scriptScrollTopById: Record<string, number>;
+    refreshCanvasRect: () => void;
     screenToCanvas: (clientX: number, clientY: number) => Position;
     setNodes: Dispatch<SetStateAction<CanvasNodeData[]>>;
     setConnections: Dispatch<SetStateAction<CanvasConnection[]>>;
@@ -72,10 +75,12 @@ export function useCanvasConnectionController({
     projectId,
     config,
     defaultDrawingEngine,
+    containerRef,
     nodesRef,
     connectionsRef,
     viewportRef,
     scriptScrollTopById,
+    refreshCanvasRect,
     screenToCanvas,
     setNodes,
     setConnections,
@@ -106,6 +111,9 @@ export function useCanvasConnectionController({
     const batchConnectionPointerStartRef = useRef<Position | null>(null);
     const pointerMoveFrameRef = useRef<number | null>(null);
     const latestPointerMoveRef = useRef<PointerEvent | null>(null);
+    // 草稿线末端存的是世界坐标，而边缘自动平移会在指针不动时持续改视口。
+    // 留下最后一次指针的屏幕坐标，视口每变一次就按新视口重算，末端才不会被画布带走。
+    const lastPointerPositionRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
     const hoveredReplaceElRef = useRef<HTMLElement | null>(null);
 
     const updateConnectionReplaceHover = useCallback((element: HTMLElement | null, clientX = 0, clientY = 0) => {
@@ -511,10 +519,12 @@ export function useCanvasConnectionController({
         event.stopPropagation();
         batchConnectionPointerIdRef.current = event.pointerId;
         batchConnectionPointerStartRef.current = { x: event.clientX, y: event.clientY };
+        lastPointerPositionRef.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
         setSelectedConnectionId(null);
+        refreshCanvasRect();
         const mouseWorld = screenToCanvas(event.clientX, event.clientY);
         previewBatchConnection(eligible, null, undefined, undefined, mouseWorld);
-    }, [message, nodesRef, previewBatchConnection, screenToCanvas, setSelectedConnectionId]);
+    }, [message, nodesRef, previewBatchConnection, refreshCanvasRect, screenToCanvas, setSelectedConnectionId]);
 
     const beginBatchConnectionMode = useCallback((sourceNodeIds: string[]) => {
         const eligible = sourceNodeIds.filter((id) => {
@@ -669,12 +679,14 @@ export function useCanvasConnectionController({
         if (batchConnectionPreviewRef.current) clearBatchConnection();
         connectingPointerIdRef.current = event.pointerId;
         connectingPointerStartRef.current = { x: event.clientX, y: event.clientY };
+        lastPointerPositionRef.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+        refreshCanvasRect();
         setMouseWorld(screenToCanvas(event.clientX, event.clientY));
         setConnecting({ nodeId, handleType, handleId, anchorRatio });
         setConnectionTargetNodeId(null);
         setConnectionTargetAnchorRatio(undefined);
         setSelectedConnectionId(null);
-    }, [clearBatchConnection, closeConnectionCreateMenu, commitBatchConnection, connectNodes, screenToCanvas, setConnecting, setSelectedConnectionId]);
+    }, [clearBatchConnection, closeConnectionCreateMenu, commitBatchConnection, connectNodes, refreshCanvasRect, screenToCanvas, setConnecting, setSelectedConnectionId]);
 
     const handleConnectDrop = useCallback((event: ReactPointerEvent, nodeId: string, handleId?: string) => {
         event.preventDefault();
@@ -693,66 +705,89 @@ export function useCanvasConnectionController({
     useEffect(() => {
         const cancelPendingPointerMove = () => {
             latestPointerMoveRef.current = null;
+            lastPointerPositionRef.current = null;
             if (pointerMoveFrameRef.current !== null) window.cancelAnimationFrame(pointerMoveFrameRef.current);
             pointerMoveFrameRef.current = null;
+        };
+        /**
+         * 把一个指针屏幕位置同步成草稿线末端、落点目标和引用替换高亮。
+         *
+         * `trackHover` 只在真实指针移动时为真：边缘自动平移期间指针并没有动，
+         * 每帧 elementFromPoint 既会强制同步布局，命中结果也只是跟着画布漂。
+         */
+        const syncConnectionPointer = (clientX: number, clientY: number, pointerId: number, trackHover: boolean) => {
+            const batch = batchConnectionPreviewRef.current;
+            if (batch && (batchConnectionPointerIdRef.current === null || batchConnectionPointerIdRef.current === pointerId)) {
+                const target = getBatchConnectionDropTarget(clientX, clientY, batch.sourceNodeIds);
+                const mouseWorld = screenToCanvas(clientX, clientY);
+                previewBatchConnection(batch.sourceNodeIds, target.nodeId, target.handleId, target.anchorRatio, mouseWorld);
+                return;
+            }
+            const current = connectingParamsRef.current;
+            if (!current || connectingPointerIdRef.current !== pointerId || pendingConnectionCreateRef.current) return;
+            if (trackHover) {
+                if (current.handleType === "source" && typeof document !== "undefined") {
+                    const el = document.elementFromPoint(clientX, clientY);
+                    let chip = el?.closest<HTMLElement>("[data-reference-chip]");
+                    if (!chip) {
+                        const shelf = el?.closest<HTMLElement>(".canvas-node-composer-references");
+                        if (shelf) {
+                            const chips = Array.from(shelf.querySelectorAll<HTMLElement>("[data-reference-chip]"));
+                            let closestChip: HTMLElement | null = null;
+                            let minDistance = Number.POSITIVE_INFINITY;
+                            chips.forEach((c) => {
+                                const rect = c.getBoundingClientRect();
+                                const dist = Math.abs(clientX - (rect.left + rect.width / 2));
+                                if (dist < minDistance) {
+                                    minDistance = dist;
+                                    closestChip = c;
+                                }
+                            });
+                            chip = closestChip;
+                        }
+                    }
+                    updateConnectionReplaceHover(chip || null, clientX, clientY);
+                } else {
+                    updateConnectionReplaceHover(null);
+                }
+            }
+            const dropTarget = getConnectionDropTarget(clientX, clientY, current);
+            const point = screenToCanvas(clientX, clientY);
+            setConnectionApproach((previous) => latchCanvasConnectionApproach(previous, dropTarget.nodeId, point));
+            setConnectionTargetNodeId(dropTarget.nodeId);
+            setConnectionTargetAnchorRatio(dropTarget.anchorRatio);
+            setMouseWorld((previous) => previous.x === point.x && previous.y === point.y ? previous : point);
         };
         const flushPointerMove = () => {
             pointerMoveFrameRef.current = null;
             const event = latestPointerMoveRef.current;
             latestPointerMoveRef.current = null;
             if (!event) return;
-            const batch = batchConnectionPreviewRef.current;
-            if (batch && (batchConnectionPointerIdRef.current === null || batchConnectionPointerIdRef.current === event.pointerId)) {
-                const target = getBatchConnectionDropTarget(event.clientX, event.clientY, batch.sourceNodeIds);
-                const mouseWorld = screenToCanvas(event.clientX, event.clientY);
-                previewBatchConnection(batch.sourceNodeIds, target.nodeId, target.handleId, target.anchorRatio, mouseWorld);
-                return;
-            }
-            const current = connectingParamsRef.current;
-            if (!current || connectingPointerIdRef.current !== event.pointerId || pendingConnectionCreateRef.current) return;
-            if (current.handleType === "source" && typeof document !== "undefined") {
-                const el = document.elementFromPoint(event.clientX, event.clientY);
-                let chip = el?.closest<HTMLElement>("[data-reference-chip]");
-                if (!chip) {
-                    const shelf = el?.closest<HTMLElement>(".canvas-node-composer-references");
-                    if (shelf) {
-                        const chips = Array.from(shelf.querySelectorAll<HTMLElement>("[data-reference-chip]"));
-                        let closestChip: HTMLElement | null = null;
-                        let minDistance = Number.POSITIVE_INFINITY;
-                        chips.forEach((c) => {
-                            const rect = c.getBoundingClientRect();
-                            const dist = Math.abs(event.clientX - (rect.left + rect.width / 2));
-                            if (dist < minDistance) {
-                                minDistance = dist;
-                                closestChip = c;
-                            }
-                        });
-                        chip = closestChip;
-                    }
-                }
-                updateConnectionReplaceHover(chip || null, event.clientX, event.clientY);
-            } else {
-                updateConnectionReplaceHover(null);
-            }
-            const dropTarget = getConnectionDropTarget(event.clientX, event.clientY, current);
-            const point = screenToCanvas(event.clientX, event.clientY);
-            setConnectionApproach((previous) => latchCanvasConnectionApproach(previous, dropTarget.nodeId, point));
-            setConnectionTargetNodeId(dropTarget.nodeId);
-            setConnectionTargetAnchorRatio(dropTarget.anchorRatio);
-            setMouseWorld(point);
+            syncConnectionPointer(event.clientX, event.clientY, event.pointerId, true);
         };
         const handlePointerMove = (event: PointerEvent) => {
             // Pointer events can arrive faster than the canvas can paint. Keep
             // only the latest position and update the preview once per frame,
             // which prevents redundant React/Leafer work and visible jitter.
+            lastPointerPositionRef.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
             latestPointerMoveRef.current = event;
             if (pointerMoveFrameRef.current === null) pointerMoveFrameRef.current = window.requestAnimationFrame(flushPointerMove);
         };
+        // 视口自走时重算末端：边缘自动平移逐帧改视口却不产生 pointermove，
+        // 没有这一步，草稿线会以自动平移的速度离开指针，指针停住时偏移还会一直累积。
+        const container = containerRef.current;
+        const unsubscribeViewportPreview = container
+            ? subscribeCanvasGraphicsViewportPreview(container, () => {
+                const pointer = lastPointerPositionRef.current;
+                if (!pointer) return;
+                if (!connectingParamsRef.current && !batchConnectionPreviewRef.current) return;
+                syncConnectionPointer(pointer.x, pointer.y, pointer.pointerId, false);
+            })
+            : null;
         const handlePointerUp = (event: PointerEvent) => {
-            latestPointerMoveRef.current = null;
-            if (pointerMoveFrameRef.current !== null) {
-                window.cancelAnimationFrame(pointerMoveFrameRef.current);
-                pointerMoveFrameRef.current = null;
+            cancelPendingPointerMove();
+            if (batchConnectionPointerIdRef.current === event.pointerId || connectingPointerIdRef.current === event.pointerId) {
+                refreshCanvasRect();
             }
             if (batchConnectionPointerIdRef.current === event.pointerId) {
                 const start = batchConnectionPointerStartRef.current;
@@ -809,12 +844,13 @@ export function useCanvasConnectionController({
         window.addEventListener("blur", cancel);
         return () => {
             cancelPendingPointerMove();
+            unsubscribeViewportPreview?.();
             window.removeEventListener("pointermove", handlePointerMove);
             window.removeEventListener("pointerup", handlePointerUp);
             window.removeEventListener("pointercancel", handlePointerCancel);
             window.removeEventListener("blur", cancel);
         };
-    }, [clearBatchConnection, commitBatchConnection, finishBatchConnection, finishConnection, getBatchConnectionDropTarget, getConnectionDropTarget, openBatchConnectionCreateMenu, previewBatchConnection, screenToCanvas, setConnecting]);
+    }, [clearBatchConnection, commitBatchConnection, finishBatchConnection, finishConnection, getBatchConnectionDropTarget, getConnectionDropTarget, openBatchConnectionCreateMenu, previewBatchConnection, refreshCanvasRect, screenToCanvas, setConnecting]);
 
     return {
         cancelPendingConnectionCreate,

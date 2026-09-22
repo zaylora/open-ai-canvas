@@ -17,7 +17,6 @@ type CanvasLeaferGraphicsLayerProps = {
     theme: CanvasTheme;
     displayConnections: CanvasDisplayConnection[];
     selectedConnectionId: string | null;
-    relatedConnectionIds: Set<string>;
     scriptScrollTopById: Record<string, number>;
     connectingParams: ConnectionHandle | null;
     batchConnectionPreview: CanvasBatchConnectionPreview | null;
@@ -46,6 +45,7 @@ type UnderlayScene = LeaferScene & {
 
 type ConnectionSceneEntry = {
     path: Path;
+    arrow: Path;
     connection: CanvasDisplayConnection["connection"];
     from: CanvasNodeData;
     to: CanvasNodeData;
@@ -57,6 +57,7 @@ type OverlayScene = LeaferScene & {
     selectionBounds: Rect;
     guides: Path;
     draft: Path;
+    draftArrow: Path;
     batchDrafts: Group;
     dragPreview: CanvasNodeDragPreview | null;
 };
@@ -154,7 +155,7 @@ export function CanvasLeaferGraphicsLayer(props: CanvasLeaferGraphicsLayerProps)
         const underlay = underlayRef.current;
         if (!underlay) return;
         rebuildConnections(underlay, props);
-    }, [props.displayConnections, props.relatedConnectionIds, props.scriptScrollTopById, props.selectedConnectionId, props.theme]);
+    }, [props.displayConnections, props.scriptScrollTopById, props.selectedConnectionId, props.theme]);
 
     useLayoutEffect(() => {
         const overlay = overlayRef.current;
@@ -215,14 +216,16 @@ function createOverlayScene(host: HTMLDivElement): OverlayScene {
     const selectionBounds = new Rect({ visible: false, hittable: false, fill: "transparent" });
     const guides = new Path({ visible: false, hittable: false });
     const draft = new Path({ visible: false, hittable: false });
+    const draftArrow = new Path({ visible: false, hittable: false });
     const batchDrafts = new Group({ visible: false, hittable: false });
     world.add(selection);
     world.add(selectionBounds);
     world.add(guides);
     world.add(draft);
+    world.add(draftArrow);
     world.add(batchDrafts);
     leafer.add(world);
-    return { leafer, world, host, selection, selectionBounds, guides, draft, batchDrafts, dragPreview: null };
+    return { leafer, world, host, selection, selectionBounds, guides, draft, draftArrow, batchDrafts, dragPreview: null };
 }
 
 function rebuildConnections(scene: UnderlayScene, props: CanvasLeaferGraphicsLayerProps) {
@@ -230,19 +233,22 @@ function rebuildConnections(scene: UnderlayScene, props: CanvasLeaferGraphicsLay
     for (const [connectionId, entry] of scene.connectionEntries) {
         if (nextIds.has(connectionId)) continue;
         entry.path.remove();
+        entry.arrow.remove();
         scene.connectionEntries.delete(connectionId);
     }
 
     scene.connectionIdsByNodeId.clear();
     const previewIds = scene.dragPreview ? scene.dragPreview.nodeIds : null;
     for (const { connection, from, to } of props.displayConnections) {
-        const emphasized = props.selectedConnectionId === connection.id || props.relatedConnectionIds.has(connection.id);
+        const emphasized = props.selectedConnectionId === connection.id;
         const signature = connectionSceneSignature(connection, from, to, props, emphasized);
         let entry = scene.connectionEntries.get(connection.id);
         if (!entry) {
             const path = new Path({ hittable: false });
+            const arrow = new Path({ hittable: false });
             scene.connections.add(path);
-            entry = { path, connection, from, to, signature: "" };
+            scene.connections.add(arrow);
+            entry = { path, arrow, connection, from, to, signature: "" };
             scene.connectionEntries.set(connection.id, entry);
         }
         entry.connection = connection;
@@ -290,14 +296,23 @@ function connectionSceneSignature(connection: CanvasDisplayConnection["connectio
 function syncConnectionPath(entry: ConnectionSceneEntry, props: CanvasLeaferGraphicsLayerProps, preview: CanvasNodeDragPreview | null, previewIds: ReadonlySet<string> | null = preview?.nodeIds || null) {
     const from = translatePreviewNode(entry.from, previewIds, preview);
     const to = translatePreviewNode(entry.to, previewIds, preview);
-    const emphasized = props.selectedConnectionId === entry.connection.id || props.relatedConnectionIds.has(entry.connection.id);
+    const emphasized = props.selectedConnectionId === entry.connection.id;
+    const connectionPath = canvasConnectionPath(entry.connection, from, to, props.scriptScrollTopById[entry.from.id] || 0, props.scriptScrollTopById[entry.to.id] || 0);
     entry.path.set({
-        path: canvasConnectionPath(entry.connection, from, to, props.scriptScrollTopById[entry.from.id] || 0, props.scriptScrollTopById[entry.to.id] || 0).pathD,
+        path: connectionPath.pathD,
         stroke: emphasized ? props.theme.accent.primary : props.theme.node.muted,
         strokeWidth: emphasized ? 2.8 : 2,
         strokeScaleFixed: true,
         strokeCap: "round",
         opacity: emphasized ? 0.95 : 0.8,
+        hittable: false,
+    });
+    entry.arrow.set({
+        path: connectionArrowPath({ x: connectionPath.endX, y: connectionPath.endY }),
+        fill: props.theme.node.muted,
+        stroke: props.theme.node.muted,
+        strokeWidth: 0,
+        opacity: emphasized ? 0.95 : 0.9,
         hittable: false,
     });
 }
@@ -345,18 +360,30 @@ function syncOverlayContent(scene: OverlayScene, props: CanvasLeaferGraphicsLaye
 
     const connecting = props.connectingParams;
     scene.draft.visible = Boolean(connecting);
+    scene.draftArrow.visible = Boolean(connecting);
     if (connecting) {
+        const source = props.nodeById.get(connecting.nodeId);
+        const target = props.connectionTargetNodeId ? props.nodeById.get(props.connectionTargetNodeId) : undefined;
         scene.draft.set({
             path: activeConnectionPath(
-                props.nodeById.get(connecting.nodeId),
+                source,
                 connecting,
                 props.mouseWorld,
-                props.connectionTargetNodeId ? props.nodeById.get(props.connectionTargetNodeId) : undefined,
+                target,
                 props.scriptScrollTopById[connecting.nodeId] || 0,
             ),
-            stroke: props.theme.accent.primary,
+            stroke: props.theme.node.muted,
             strokeCap: "round",
-            opacity: 0.72,
+            strokeWidth: 2,
+            strokeScaleFixed: true,
+            opacity: 0.9,
+        });
+        scene.draftArrow.set({
+            path: connectionArrowPath(activeConnectionEndpoint(connecting, props.mouseWorld, target)),
+            fill: props.theme.node.muted,
+            stroke: props.theme.node.muted,
+            strokeWidth: 0,
+            opacity: 0.9,
         });
     }
 
@@ -411,7 +438,9 @@ function syncViewport(viewport: ViewportTransform, width: number, height: number
         dashPattern: [4 / scale, 4 / scale],
         opacity: 0.68,
     });
-    overlay.draft.set({ strokeWidth: 1.4 / scale, dashPattern: [8 / scale, 8 / scale] });
+    // 线宽由 syncOverlayContent 以 strokeScaleFixed 固定成屏幕像素，这里只折算虚线节距；
+    // 再写一次 strokeWidth 会和那一侧互相覆盖，草稿线粗细就会随缩放跳变。
+    overlay.draft.set({ dashPattern: [8 / scale, 8 / scale] });
     overlay.guides.set({
         visible: typeof props.alignmentGuides.vertical === "number" || typeof props.alignmentGuides.horizontal === "number",
         path: guidePath(viewport, width, height, props.alignmentGuides),
@@ -420,6 +449,19 @@ function syncViewport(viewport: ViewportTransform, width: number, height: number
         dashPattern: [5 / scale, 5 / scale],
         opacity: 0.72,
     });
+}
+
+function connectionArrowPath(point: Position) {
+    const size = 9;
+    const half = 5;
+    return `M ${point.x} ${point.y} L ${point.x - size} ${point.y - half} L ${point.x - size} ${point.y + half} Z`;
+}
+
+function activeConnectionEndpoint(handle: ConnectionHandle, mouseWorld: Position, target?: CanvasNodeData) {
+    if (handle.handleType === "source" && target) {
+        return { x: target.position.x, y: target.position.y + target.height / 2 };
+    }
+    return mouseWorld;
 }
 
 function isViewportPreview(container: HTMLDivElement, viewport: ViewportTransform, rasterViewport: ViewportTransform) {

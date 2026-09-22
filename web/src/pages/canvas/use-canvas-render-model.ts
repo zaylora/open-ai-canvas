@@ -276,16 +276,14 @@ export function useCanvasRenderModel({
     );
     const relatedHighlight = useMemo(() => {
         const nodeIds = new Set<string>();
-        const connectionIds = new Set<string>();
-        if (!activeNodeId) return { nodeIds, connectionIds };
+        if (!activeNodeId) return { nodeIds };
         nodeIds.add(activeNodeId);
         connections.forEach((connection) => {
             if (connection.fromNodeId !== activeNodeId && connection.toNodeId !== activeNodeId) return;
-            connectionIds.add(connection.id);
             nodeIds.add(connection.fromNodeId);
             nodeIds.add(connection.toNodeId);
         });
-        return { nodeIds, connectionIds };
+        return { nodeIds };
     }, [activeNodeId, connections]);
     const connectionSpatialIndex = useMemo(() => {
         const entries: CanvasSpatialIndexEntry<CanvasDisplayConnection>[] = [];
