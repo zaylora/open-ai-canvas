@@ -2589,3 +2589,85 @@ SSE 现在按 revision 变化发送紧凑快照，无变化只 heartbeat；客�
 入口精简与工具草稿复测：移除左侧工具菜单及图片节点提示词模板入口，保留图片风格 / 预设和其他节点模板入口。工具引用列表读取草稿改用空值判断，明确清空时不再从原始生成提示词回读旧标签。风格和预设的选择、替换、连续编辑、标签移除、全文清空及保存重载覆盖有图/空节点两种情况；5 个专项文件共 58 项通过，TypeScript 类型检查通过。实际页面仍需确认普通/放大编辑器均无图片提示词模板入口，以及风格和预设清空后重新聚焦不回填。
 
 主分支提交前复测：前端 `bun run test` 全量 1925 项通过，生产构建、类型检查、UI 退场 lint 通过；构建仍有大分块提示。同步了技能/工具标签结构与多行连接菜单的源码守护断言。后端 `go test ./...` 全量通过，工具、迁移、资源引用、handler 及工具预览权限/项目封面专项通过。本轮未执行真实模型调用、PostgreSQL 实库迁移或登录态浏览器验收，这些项目继续保留待验收。
+
+## 画布平移卡顿与闪烁：按 Performance 实测数据修复（2026-09-22）
+
+依据生产画布（36 节点 / 4 条边）的 DevTools Performance 录制与单变量受控实验。录制显示渲染+绘制占忙碌时间 62%、执行脚本仅 25%，CLS 2.56，瓶颈在样式计算 / 布局 / 光栅而非业务 JS。注意该画布节点数远低于 `CANVAS_VIRTUALIZE_NODE_THRESHOLD`（240），视口裁剪未启用，因此与裁剪相关的路径不是本次主因。
+
+- [x] 交互期降级世界层内部绘制：`[data-canvas-viewport-interacting="true"] .canvas-world-layer :where(*)` 关闭 `backdrop-filter`、`box-shadow`、`transition`。实测 27% 缩放下，关 backdrop-filter 使 >20ms 卡顿帧 69 → 38，关 box-shadow 69 → 39。
+- [x] 世界层合成态按倍率决定：纯平移保持 `will-change: transform` 不降级，只有缩放提交才清除 `data-canvas-viewport-composited` 并按新倍率重排版。世界层光栅面积是内容包围盒（实测 60% 缩放 12 倍视口、100% 34 倍），每次降级都要整层重栅格。实测 60% 缩放 p50 20.6ms → 13.7ms。
+- [x] 连线层 SVG 不再跟随视口。原先 `left/top/width/height/viewBox` 由 viewport 算出，每次提交都重写这些**布局属性**，触发 layout 与真实布局偏移（实测占 CLS 的 98.4%，是连线闪烁主因）。改为只由连线内容包围盒决定，平移缩放期间完全不动。
+- [x] 图形层不再逐帧强制同步布局：视口预览回调原先每次 `getBoundingClientRect`（一次平移十几次），改用 ResizeObserver 维护的缓存尺寸；容器尺寸取整，避免亚像素抖动让 Leafer 重建 backing store 清空 canvas（第二个闪烁源）；撤销预览变换时不再清 `will-change`。
+- [x] `FluidOrb` 停止每帧读 `clientWidth`/`clientHeight`（826/826 帧命中，是 Insights「强制自动重排」的常驻来源），改由 ResizeObserver 推送；新增 IntersectionObserver + `visibilitychange` 门控，不可见或页面切后台时停掉 rAF。实测 p99 帧时间 34.5ms → 21.7ms、最坏帧 55.4ms → 28.1ms。
+- [x] 移除两处常驻角标的 `backdrop-filter`：资源标签背景 `theme.toolbar.panel` 已是 94%/97% 不透明，图片尺寸角标改 `bg-black/70`。这两处模糊在小标签上无可见收益，却让每个节点多出合成层。
+
+明确不做（实测反例）：**不要给节点或世界层加 `contain: paint`**，它会给每个节点各建一层，p50 反而从 14.6ms 升到 20.3ms。
+
+待真实画布验收：
+
+- [ ] 在同一画布上重新录制 Performance（建议用无痕窗口排除扩展干扰，原录制混入了 React DevTools 的 132 次 `getClientRects()`），确认渲染+绘制占比下降、CLS 显著回落。
+- [ ] 平移时确认连线不再闪烁、窗口外节点内容不再"闪一下"。
+- [ ] 缩放后确认文字与图片仍然清晰，没有复用交互期的低分辨率纹理（这是保留缩放降级分支的原因）。
+- [ ] 确认平移期间节点阴影临时消失、松手恢复这一视觉变化可接受；若不可接受，可只保留 backdrop-filter 那条降级。
+- [ ] 显存占用检查：世界层平移后常驻合成层，超大画布需确认没有异常增长。
+- [ ] Agent 发光球在滚出视口、切后台再回来后仍能正常恢复动画。
+
+尚未处理（需进一步决策）：报告 P1 建议的"降低视口裁剪阈值让世界层光栅面积恒等于视口"，是唯一随节点数扩展的结构性方案，但启用裁剪会带来节点 mount/unmount 时的图片重解码闪烁，需配套处理后再评估。
+
+本地自动验证：类型检查、ESLint、生产构建通过。前端全量 `bun test` 1944 通过 / 15 失败，与基线的 15 项既有失败完全一致（涉及 appearance 启动、public film entry、图片上传占位、画布快捷键、API 模块约定、wallet 与 collection 样式，均与本次改动无关），未引入新失败。新增 `test/canvas-paint-cost.test.ts` 10 项覆盖上述各条。另修正 `canvas-media-performance.test.ts` 中写死 `\n` 的正则（本机 CRLF 检出下恒失败，与本次改动无关）。未启动 dev server，未做浏览器验收。
+
+## 画布平移三类闪烁的定向修复（2026-09-22，续）
+
+上一轮降低绘制开销后仍然闪烁。按现象逐条定位，用户确认的三类是：节点滑入视口先空白、图片变回占位再出现、连线消失或位置跳；两种平移路径（拖动、滚轮/触控板）都会触发。用户明确表示松手瞬间没有整体跳变，因此上一轮新增的交互期降级保留。
+
+- [x] **连线改由世界层 SVG 常态渲染**。Leafer 的 canvas 只有视口大小，平移时靠 CSS transform 整体推走，边缘会露出从未绘制的区域；而 `shouldRebaseCanvasRaster` 只看缩放比，平移时 ratio 恒为 1，永不触发重画——连线就在露出的区域里消失，直到松手提交才补上。现在常态由世界层内的 SVG 画（与节点同一个 transform，物理上不可能错位），Leafer 连线层默认 `visibility: hidden`，只在拖节点时接手逐帧同步。
+- [x] **图片资源放行记忆**。"变回占位"意味着 url 变空，只可能来自 `useNearViewport` 门控在节点重挂时退回 false。放行过的资源地址记入模块级集合（上限 4096），重挂直接给 url；同时去掉 `<img loading="lazy">` 这道重复门控。
+- [x] **放宽视口裁剪的入场边距**。原先入场 128/192 屏幕像素，在 0.6 倍缩放下只合 213/320 世界像素，比一个节点还窄，等于节点刚碰到视口边缘才挂载。改为 320/480，离场边距同步放大到 1024/768 保持滞回。
+
+待真实画布验收：
+
+- [ ] 平移时连线是否还会消失或跳位；拖动节点时连线是否仍能逐帧跟随（这条路径仍走 Leafer，改动后需重点回归）。
+- [ ] 图片是否还会变回占位图标。
+- [ ] 节点滑入视口是否还有空白/灰块；若仍有，继续放大入场边距或改用视口比例。
+- [ ] 确认画布的媒体性能模式设置：`performance` 模式**总是**启用视口裁剪，若之前因为卡而切到该模式，反而会引入 mount/unmount 闪烁；可切到 `quality` 对比。
+- [ ] 连线很多（数百条）的画布上确认 SVG 常态描边的渲染成本可接受，必要时再评估是否回到 canvas 渲染。
+
+尚未处理：图片变体宽度 `CANVAS_NODE_VARIANT_WIDTH` 固定 960，与节点实际显示尺寸无关（报告实测 35 张图解码后约 88MB）。按显示尺寸选档能显著降低解码内存，但缩放跨档会换 src 导致重新加载，需要设计"只升不降"或缓存策略后再做。
+
+本地自动验证：类型检查、ESLint、生产构建通过。全量 `bun test` 1948 通过 / 15 失败，与基线既有失败一致，未引入新失败。`test/canvas-paint-cost.test.ts` 扩充到 14 项，覆盖连线渲染归属、Leafer 隐藏条件、放行记忆和懒加载移除。未做浏览器验收。
+
+## 画布平移性能第二轮定向修复（2026-09-22）
+
+针对上一轮仍可能存在的拖拽卡顿、连线布局跳动和热路径强制布局，继续做最小范围修复：
+
+- [x] **缓存画布容器矩形**：`use-canvas-viewport-controller.ts` 使用 `ResizeObserver` 和 `resize` 事件维护画布矩形缓存。`screenToCanvas()` 和 `getCanvasCenter()` 不再在拖拽、框选、连线预览等高频路径中调用 `getBoundingClientRect()`。
+- [x] **节点拖拽期间冻结连线 SVG 布局盒子**：`use-canvas-render-model.ts` 在存在 `dragPreview` 时复用上一次的 `connectionLayerBounds`，避免每帧因临时节点位置或虚拟化候选变化而重写 SVG 的 `left/top/width/height/viewBox`。连线路径仍按拖拽预览位置更新。
+- [x] **减少视口预览的无效样式写入**：`canvas-live-viewport.ts` 缓存当前 live scale 和 inverse scale，纯平移时不重复写入相同 CSS 变量，保留世界层 `transform` 的逐帧更新。
+- [x] **补充源码守护测试**：`canvas-paint-cost.test.ts` 增加画布矩形缓存、拖拽期间冻结连线边界和 CSS 变量去重写入断言。
+
+本轮的目标是让热路径保持为：
+
+```text
+pointermove
+→ 读取缓存矩形
+→ 计算世界坐标
+→ 更新 transform / 连线路径
+```
+
+而不是：
+
+```text
+pointermove
+→ getBoundingClientRect()
+→ 触发布局
+→ 更新画布和连线
+```
+
+待真实画布验收：
+
+- [ ] 拖动单节点、多选节点和框选时，Performance 面板不再看到连续 `getBoundingClientRect()` 强制布局。
+- [ ] 节点拖拽期间，连线 SVG 的布局属性不再每帧变化；连线仍与节点同步移动。
+- [ ] 拖拽开始和结束时没有空白帧、连线闪烁或整体跳位。
+- [ ] 触控板平移、鼠标拖动画布和缩放后拖拽均保持流畅。
+
+本地验证记录：`git diff --check` 通过。专项测试未能得到有效结果：项目 `pretest` 会递归触发 Bun 测试，在当前 Windows 环境中出现 `AssignProcessToJobObject` 错误；当前工作区也没有可用的 `tsc` 本地二进制，因此未完成 TypeScript 类型检查。未启动 dev server，未做浏览器验收。

@@ -597,13 +597,17 @@ function BatchChildActionButton({ theme, label, icon, onClick, danger = false }:
     );
 }
 
+/**
+ * 标签背景用的 theme.toolbar.panel 已是 94%/97% 不透明，backdrop-filter 在这里看不出效果，
+ * 却让每个带标签的节点多出一个合成层，平移时还要逐帧重采样模糊，所以不加。
+ */
 function AssetTagBadges({ tags, theme }: { tags: string[]; theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
     return (
         <div className="flex min-w-0 flex-1 flex-wrap items-end gap-1">
             {tags.map((tag, index) => (
                 <span
                     key={`${tag}-${index}`}
-                    className="max-w-full truncate rounded-md border px-1.5 py-1 text-[var(--fs-tiny)] font-medium leading-none backdrop-blur-sm"
+                    className="max-w-full truncate rounded-md border px-1.5 py-1 text-[var(--fs-tiny)] font-medium leading-none"
                     style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
                 >
                     {tag.trim()}

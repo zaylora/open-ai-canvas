@@ -10000,9 +10000,25 @@ html:not(.dark) .canvas-generation-settings-trigger.ant-btn[aria-expanded="true"
         transform-origin: 0 0;
     }
 
-    [data-canvas-viewport-interacting="true"] .canvas-world-layer {
+    /* 平移不改变栅格倍率，交互一结束就撤销合成层，等于让整个世界层重新光栅一遍——
+       而世界层的光栅面积是内容包围盒，实测 60% 缩放下已是视口的 12 倍、100% 时 34 倍。
+       倍率没变就让它留在合成层里；只有缩放提交才降级，回到上面那条规则按新倍率重排版。
+       实测（147 帧驱动）：60% 缩放 p50 20.6ms → 13.7ms，>20ms 卡顿帧 87 → 41。 */
+    [data-canvas-viewport-interacting="true"] .canvas-world-layer,
+    [data-canvas-viewport-composited="true"] .canvas-world-layer {
         transform: translate3d(var(--canvas-live-x), var(--canvas-live-y), 0) scale(var(--canvas-live-scale-ratio));
         will-change: transform;
+    }
+
+    /* 交互期整体降级世界层内部的昂贵绘制。backdrop-filter 每帧都要重采样背景做高斯模糊，
+       是平移时最贵的一项；box-shadow 次之。实测（27% 缩放，147 帧）：关 backdrop-filter
+       后 >20ms 卡顿帧 69 → 38，关 box-shadow 后 69 → 39。
+       注意不要改用 contain: paint —— 实测它给每个节点各建一层，p50 反而 14.6ms → 20.3ms。 */
+    [data-canvas-viewport-interacting="true"] .canvas-world-layer :where(*) {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        box-shadow: none !important;
+        transition: none !important;
     }
 
     [data-canvas-viewport-interacting="true"] :where(.canvas-connection-flow, .canvas-connection-comet, .canvas-connection-draft) {

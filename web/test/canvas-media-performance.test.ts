@@ -49,13 +49,16 @@ describe("canvas dimension header rendering", () => {
 
 describe("large canvas media rendering", () => {
     test("keeps rendered nodes mounted longer than newly entering nodes", () => {
-        expect(canvasNodeRenderPadding(true, false)).toBe(128);
-        expect(canvasNodeRenderPadding(true, true)).toBe(640);
+        expect(canvasNodeRenderPadding(true, false)).toBe(320);
+        expect(canvasNodeRenderPadding(true, true)).toBe(1024);
         expect(canvasNodeRenderPadding(false, true)).toBeGreaterThan(canvasNodeRenderPadding(false, false));
     });
 
     test("does not eagerly load or resize LibTV thumbnails", () => {
-        expect(canvasNodeContentSource).toContain('loading="lazy"');
+        // 加载时机由 useNearViewport 门控加放行记忆决定，不再叠浏览器自己的 loading="lazy"：
+        // 视口裁剪把节点卸载重挂时，那一层会让已缓存的图再空一帧，看起来就是「变回占位」。
+        expect(canvasNodeContentSource).not.toContain('loading="lazy"');
+        expect(canvasNodeContentSource).not.toContain('loading="eager"');
         expect(canvasNodeContentSource).not.toContain('importedFromLibTV ? "eager"');
         // 变体地址本身已是缩小后的图，和 LibTV 导入一样不该再触发节点 resize。
         expect(canvasNodeContentSource).toContain("if (importedFromLibTV || usingVariant) return;");
@@ -71,7 +74,7 @@ describe("large canvas media rendering", () => {
     });
 
     test("keeps inactive video nodes on a viewport-gated static first frame", () => {
-        const inactivePreviewSource = canvasNodeContentSource.match(/function InactiveVideoPreview[\s\S]*?\n}\n\nfunction VideoPreviewPlayButton/)?.[0] || "";
+        const inactivePreviewSource = canvasNodeContentSource.match(/function InactiveVideoPreview[\s\S]*?\r?\n}\r?\n\r?\nfunction VideoPreviewPlayButton/)?.[0] || "";
         expect(canvasNodeContentSource).toContain("if (previewUrl || !nearViewport || !node.metadata?.content || !updateMetadataRef.current)");
         expect(canvasNodeContentSource).not.toContain("hydrateMediaPreview");
         expect(inactivePreviewSource).not.toContain("<video");

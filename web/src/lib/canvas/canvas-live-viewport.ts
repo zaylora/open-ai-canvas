@@ -29,7 +29,11 @@ export type CanvasNodeSelectionPreview = {
 
 const nodeDragPreviewDomStates = new WeakMap<HTMLDivElement, NodeDragPreviewDomState>();
 const nodeSelectionPreviewDomStates = new WeakMap<HTMLDivElement, NodeSelectionPreviewDomState>();
-const liveViewportElements = new WeakMap<HTMLDivElement, { worldLayer: HTMLElement | null }>();
+const liveViewportElements = new WeakMap<HTMLDivElement, {
+    worldLayer: HTMLElement | null;
+    liveScale?: number;
+    liveInverseScale?: number;
+}>();
 
 export function applyCanvasLiveViewport(container: HTMLDivElement | null, viewport: ViewportTransform, notify = true) {
     if (!container) return;
@@ -46,11 +50,20 @@ export function applyCanvasLiveViewport(container: HTMLDivElement | null, viewpo
         // 平移期间直接更新合成层，避免修改容器继承变量导致所有节点重新计算样式。
         worldLayer.style.transformOrigin = "0 0";
         worldLayer.style.transform = `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.k / committedScale})`;
-        worldLayer.style.willChange = container.dataset.canvasViewportInteracting === "true" ? "transform" : "";
+        // 跟着合成态走而不是交互态：纯平移结束后继续留在合成层，省掉一次整层重栅格。
+        const composited = container.dataset.canvasViewportInteracting === "true" || container.dataset.canvasViewportComposited === "true";
+        worldLayer.style.willChange = composited ? "transform" : "";
     }
-    container.style.setProperty("--canvas-live-scale", String(viewport.k));
+    if (elements.liveScale !== viewport.k) {
+        elements.liveScale = viewport.k;
+        container.style.setProperty("--canvas-live-scale", String(viewport.k));
+    }
     // 外置节点标题用同一帧逆倍率抵消世界层缩放，避免等待 React 提交后再校正尺寸。
-    container.style.setProperty("--canvas-live-inverse-scale", String(1 / Math.max(viewport.k, 0.05)));
+    const inverseScale = 1 / Math.max(viewport.k, 0.05);
+    if (elements.liveInverseScale !== inverseScale) {
+        elements.liveInverseScale = inverseScale;
+        container.style.setProperty("--canvas-live-inverse-scale", String(inverseScale));
+    }
     // 图形层必须逐帧跟随 DOM 世界层；浮层和滚动通知仍可按原频率节流。
     container.dispatchEvent(new CustomEvent<ViewportTransform>(CANVAS_GRAPHICS_VIEWPORT_PREVIEW_EVENT, { detail: viewport }));
     if (notify) {

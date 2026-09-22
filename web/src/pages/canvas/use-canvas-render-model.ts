@@ -46,6 +46,9 @@ type UseCanvasRenderModelOptions = {
     dialogNodeId: string | null;
 };
 
+/** 没有连线时的占位范围，常量引用避免每次重算都换掉 SVG 的布局属性。 */
+const CONNECTION_LAYER_EMPTY_BOUNDS = { left: 0, top: 0, width: 2, height: 2 } as const;
+
 /** 关闭视口裁剪时使用的恒定边界，引用稳定以免触发下游 useMemo 重算。 */
 const INFINITE_RENDER_BOUNDS = {
     enter: { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity },
@@ -145,14 +148,7 @@ export function useCanvasRenderModel({
         return { batchChildCountById, batchMotionById, canvasImageNodes, collapsedBatchChildIds, frameChildrenById, renderHiddenNodeIds };
     }, [collapsingBatchIds, nodeById, nodes]);
     const { batchChildCountById, batchMotionById, canvasImageNodes, collapsedBatchChildIds, frameChildrenById, renderHiddenNodeIds } = nodeDerivedData;
-    const connectionLayerBounds = useMemo(() => {
-        const padding = (reduceMediaEffects ? 96 : 144) / Math.max(viewport.k, 0.05);
-        const left = -viewport.x / viewport.k - padding;
-        const top = -viewport.y / viewport.k - padding;
-        const width = viewportSize.width / viewport.k + padding * 2;
-        const height = viewportSize.height / viewport.k + padding * 2;
-        return { left, top, width: Math.max(2, width), height: Math.max(2, height) };
-    }, [reduceMediaEffects, viewport.k, viewport.x, viewport.y, viewportSize.height, viewportSize.width]);
+    const connectionLayerBoundsRef = useRef<typeof CONNECTION_LAYER_EMPTY_BOUNDS | { left: number; top: number; width: number; height: number }>(CONNECTION_LAYER_EMPTY_BOUNDS);
     const renderBounds = useMemo(() => {
         // 关闭裁剪时返回与 viewport 无关的恒定边界：否则 visibleNodes 和 displayConnections
         // 仍会因为 renderBounds 每帧变化而重算，节点集合没变也要重新遍历所有连线。
@@ -342,6 +338,42 @@ export function useCanvasRenderModel({
             return [{ connection, from, to }];
         });
     }, [connectionSpatialIndex, dragPreview, renderBounds, virtualizeNodes]);
+
+    /**
+     * 连线层 SVG 的画布范围。
+     *
+     * 这些值最终写成 SVG 的 left / top / width / height 和 viewBox，都是**布局属性**而不是
+     * transform：跟着视口走就意味着每次提交视口都要 layout 一次，并产生一次真实布局偏移
+     * （实测占整个页面 CLS 的 98.4%，是连线闪烁的主因）。改成只由连线内容决定后，平移和
+     * 缩放期间这层完全不动，只有连线增删或节点移动才重算一次。
+     *
+     * SVG 本身是 overflow: visible，范围算小了也不会裁掉曲线，padding 只是给贝塞尔控制点留余量。
+     */
+    const connectionLayerBounds = useMemo(() => {
+        // 节点拖拽期间只移动 path，不改变 SVG 的布局盒子。否则虚拟化进出场或
+        // dragPreview 的临时坐标会让 left/top/width/height 每帧变化，造成连线闪烁。
+        if (dragPreview) return connectionLayerBoundsRef.current;
+        if (displayConnections.length === 0) return CONNECTION_LAYER_EMPTY_BOUNDS;
+        let left = Infinity;
+        let top = Infinity;
+        let right = -Infinity;
+        let bottom = -Infinity;
+        for (const { from, to } of displayConnections) {
+            left = Math.min(left, from.position.x, to.position.x);
+            top = Math.min(top, from.position.y, to.position.y);
+            right = Math.max(right, from.position.x + from.width, to.position.x + to.width);
+            bottom = Math.max(bottom, from.position.y + from.height, to.position.y + to.height);
+        }
+        const padding = 240;
+        const next = {
+            left: left - padding,
+            top: top - padding,
+            width: Math.max(2, right - left + padding * 2),
+            height: Math.max(2, bottom - top + padding * 2),
+        };
+        connectionLayerBoundsRef.current = next;
+        return next;
+    }, [displayConnections, dragPreview]);
 
     const configInputsById = useMemo(() => {
         const map = new Map<string, NodeGenerationInput[]>();

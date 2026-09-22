@@ -83,9 +83,17 @@ export function CanvasLeaferGraphicsLayer(props: CanvasLeaferGraphicsLayerProps)
         underlayRef.current = underlay;
         overlayRef.current = overlay;
 
+        // 容器尺寸由 ResizeObserver 维护。视口预览回调原先每次都 getBoundingClientRect，
+        // 而它跑在 rAF 里、样式又是脏的，等于一次平移里十几次强制同步布局；而且预览分支
+        // 根本用不到这个尺寸。
+        const containerSize = { width: 1, height: 1 };
         const resize = () => {
             const rect = container.getBoundingClientRect();
-            const size = { width: Math.max(1, rect.width), height: Math.max(1, rect.height), pixelRatio: canvasPixelRatio() };
+            // 取整：rect 的亚像素抖动会让 leafer 认定尺寸变化并重建 backing store，
+            // canvas 内容随之清空，平移中就会看到连线闪一下。
+            containerSize.width = Math.max(1, Math.round(rect.width));
+            containerSize.height = Math.max(1, Math.round(rect.height));
+            const size = { width: containerSize.width, height: containerSize.height, pixelRatio: canvasPixelRatio() };
             underlay.leafer.resize(size);
             overlay.leafer.resize(size);
             syncViewport(rasterViewportRef.current, size.width, size.height, underlay, overlay, propsRef.current);
@@ -98,10 +106,9 @@ export function CanvasLeaferGraphicsLayer(props: CanvasLeaferGraphicsLayerProps)
         window.addEventListener("resize", resize);
         const unsubscribe = subscribeCanvasGraphicsViewportPreview(container, (next) => {
             viewportRef.current = next;
-            const rect = container.getBoundingClientRect();
             if (isViewportPreview(container, next, rasterViewportRef.current)) {
                 if (shouldRebaseCanvasRaster(next, rasterViewportRef.current)) {
-                    syncViewport(next, rect.width, rect.height, underlay, overlay, propsRef.current);
+                    syncViewport(next, containerSize.width, containerSize.height, underlay, overlay, propsRef.current);
                     rasterViewportRef.current = next;
                     forceSceneRender(underlay, overlay);
                     resetScenePreview(underlay, overlay);
@@ -112,13 +119,18 @@ export function CanvasLeaferGraphicsLayer(props: CanvasLeaferGraphicsLayerProps)
             }
             resetScenePreview(underlay, overlay);
             if (sameCanvasViewport(next, rasterViewportRef.current)) return;
-            syncViewport(next, rect.width, rect.height, underlay, overlay, propsRef.current);
+            syncViewport(next, containerSize.width, containerSize.height, underlay, overlay, propsRef.current);
             rasterViewportRef.current = next;
+            // host 的合成变换刚被清掉，场景必须当场画完，否则会露出一帧旧栅格。
+            forceSceneRender(underlay, overlay);
         });
         const unsubscribeSelection = subscribeCanvasSelectionPreview(container, (selection) => {
             syncSelection(overlay.selection, selection, propsRef.current.theme);
         });
         const unsubscribeNodeDrag = subscribeCanvasNodeDragPreview(container, (preview) => {
+            // 连线常态由世界层里的 SVG 画，这层只在拖节点时接手逐帧同步。用 visibility 而不是
+            // display 切换，保住合成层，拖拽起手那一帧就有内容。
+            underlay.host.style.visibility = preview ? "visible" : "hidden";
             applyConnectionDragPreview(underlay, propsRef.current, preview);
             overlay.dragPreview = preview;
             syncLiveSelectionBounds(overlay, propsRef.current, viewportRef.current.k);
@@ -181,7 +193,7 @@ export function CanvasLeaferGraphicsLayer(props: CanvasLeaferGraphicsLayerProps)
 
     return (
         <>
-            <div ref={underlayHostRef} data-canvas-leafer-underlay className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden />
+            <div ref={underlayHostRef} data-canvas-leafer-underlay className="pointer-events-none absolute inset-0 z-0 overflow-hidden" style={{ visibility: "hidden" }} aria-hidden />
             <div ref={overlayHostRef} data-canvas-leafer-overlay className="pointer-events-none absolute inset-0 z-[var(--z-canvas-overlay)] overflow-hidden" aria-hidden />
         </>
     );
@@ -433,7 +445,7 @@ function resetScenePreview(...scenes: LeaferScene[]) {
     for (const scene of scenes) {
         scene.host.style.transform = "";
         scene.host.style.transformOrigin = "";
-        scene.host.style.willChange = "";
+        // will-change 不清：图形层每次平移都要用它，反复设/清会让合成层来回创建销毁。
         delete scene.host.dataset.canvasLeaferPreview;
     }
 }

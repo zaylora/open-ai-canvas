@@ -101,11 +101,21 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
         document.body.style.cursor = "default";
     }, [interactive, containerRef]);
 
+    const committedScaleRef = useRef(viewport.k);
     useLayoutEffect(() => {
         if (interactingRef.current) return;
         viewportRef.current = viewport;
         scaleRef.current = viewport.k;
-        applyCanvasLiveViewport(containerRef.current, viewport);
+        const container = containerRef.current;
+        if (container) {
+            // 纯平移不改栅格倍率，世界层可以一直留在合成层里。降级会让整个世界层重新光栅，
+            // 而它的光栅面积是内容包围盒（实测 12~34 倍视口），代价远高于常驻显存。
+            // 只有缩放提交才降级，让 DOM 按新倍率重排版，避免复用交互期的低分辨率纹理。
+            if (committedScaleRef.current === viewport.k) container.dataset.canvasViewportComposited = "true";
+            else delete container.dataset.canvasViewportComposited;
+            committedScaleRef.current = viewport.k;
+        }
+        applyCanvasLiveViewport(container, viewport);
     }, [containerRef, viewport]);
 
     useEffect(() => {

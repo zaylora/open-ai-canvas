@@ -534,7 +534,7 @@ function InactiveVideoPreview({ node, theme, onPlay }: Pick<CanvasNodeContentPro
 
     if (previewUrl) {
         return <div ref={previewRef} className="group/video-preview relative size-full overflow-hidden rounded-[var(--node-radius)] bg-black">
-            <img src={previewUrl} alt={`${node.title || "视频"} 静态预览`} loading="lazy" decoding="async" draggable={false} className="pointer-events-none size-full select-none object-contain" />
+            <img src={previewUrl} alt={`${node.title || "视频"} 静态预览`} decoding="async" draggable={false} className="pointer-events-none size-full select-none object-contain" />
             <VideoPreviewPlayButton title={node.title || "视频"} onPlay={onPlay} />
         </div>;
     }
@@ -637,10 +637,28 @@ function ImageContent({ node, theme, isBatchRoot, batchCount, batchPreviewNodes,
     return (
         <BatchFrame batchPreviewNodes={batchPreviewNodes} batchCount={isBatchRoot ? batchCount : 0} batchExpanded={batchExpanded} batchOpening={batchOpening} batchRecovering={batchRecovering} theme={theme} onToggleBatch={onToggleBatch}>
             <div ref={imageContainerRef} className="h-full w-full overflow-hidden rounded-[var(--node-radius)]">
-                {url ? <img src={displayUrl} alt={node.title} loading="lazy" decoding="async" draggable={false} onDragStart={(event) => event.preventDefault()} onLoad={(event) => fitToImage(event.currentTarget)} onError={() => { if (usingVariant) setVariantFailed(true); }} className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`} /> : <div className="grid size-full place-items-center" style={{ color: theme.node.muted }}>{loading ? <LoaderCircle className="size-5 animate-spin" /> : <ImageIcon className="size-5 opacity-45" />}</div>}
+                {url ? <img src={displayUrl} alt={node.title} decoding="async" draggable={false} onDragStart={(event) => event.preventDefault()} onLoad={(event) => fitToImage(event.currentTarget)} onError={() => { if (usingVariant) setVariantFailed(true); }} className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`} /> : <div className="grid size-full place-items-center" style={{ color: theme.node.muted }}>{loading ? <LoaderCircle className="size-5 animate-spin" /> : <ImageIcon className="size-5 opacity-45" />}</div>}
             </div>
         </BatchFrame>
     );
+}
+
+/**
+ * 已经被视口门控放行过的资源地址。
+ *
+ * 门控本身只为解决「首次别一次性加载整张画布」。但视口裁剪会把节点卸载再重挂，重挂时
+ * `eager` 退回 false，url 先变空 —— 于是节点里渲染的是占位图标，等 IntersectionObserver
+ * 回调回来才重新挂 `<img>`。即使 HTTP 缓存 100% 命中，中间也实打实空一帧，平移时就是
+ * 连片的「图片变回占位再出现」。放行过一次就记住，重挂直接给 url。
+ */
+const unlockedResourceUrls = new Set<string>();
+// 上限只防长会话里无限增长；单个画布的资源量级远小于它，命中率不受影响。
+const UNLOCKED_RESOURCE_LIMIT = 4096;
+
+function unlockResourceUrl(url: string) {
+    if (!url || unlockedResourceUrls.has(url)) return;
+    if (unlockedResourceUrls.size >= UNLOCKED_RESOURCE_LIMIT) unlockedResourceUrls.clear();
+    unlockedResourceUrls.add(url);
 }
 
 function useNodeResourceUrl(node: CanvasNodeData, eager: boolean) {
@@ -666,19 +684,25 @@ function useNodeResourceUrl(node: CanvasNodeData, eager: boolean) {
     // resources; otherwise DOM virtualization does not reduce image work.
     const isLazyVisual = node.type === CanvasNodeType.Image;
     const isHttpUrl = Boolean(fallback && !fallback.startsWith("data:"));
-    const initialUrl = eager && isRemoteResource ? remoteUrl : (eager && isLazyVisual && isHttpUrl ? fallback : (isRemoteResource || isLazyVisual ? "" : fallback));
+    const resolvedUrl = isRemoteResource ? remoteUrl : fallback;
+    const ready = eager || unlockedResourceUrls.has(resolvedUrl);
+    const initialUrl = ready && isRemoteResource ? remoteUrl : (ready && isLazyVisual && isHttpUrl ? fallback : (isRemoteResource || isLazyVisual ? "" : fallback));
     const [url, setUrl] = useState(() => initialUrl);
-    const [loading, setLoading] = useState(() => !initialUrl && isRemoteResource && eager);
+    const [loading, setLoading] = useState(() => !initialUrl && isRemoteResource && ready);
+
+    useEffect(() => {
+        if (ready) unlockResourceUrl(resolvedUrl);
+    }, [ready, resolvedUrl]);
 
     useEffect(() => {
         if (!isRemoteResource) {
-            setUrl(isLazyVisual && !eager ? "" : fallback);
+            setUrl(isLazyVisual && !ready ? "" : fallback);
             setLoading(false);
             return;
         }
-        setUrl(eager ? remoteUrl : "");
+        setUrl(ready ? remoteUrl : "");
         setLoading(false);
-    }, [eager, fallback, isLazyVisual, isRemoteResource, remoteUrl]);
+    }, [fallback, isLazyVisual, isRemoteResource, ready, remoteUrl]);
 
     return { url, loading };
 }
@@ -707,7 +731,7 @@ export function CanvasNodeImageInfo({ node }: { node: CanvasNodeData }) {
     const width = Math.round(node.metadata?.naturalWidth || node.width);
     const height = Math.round(node.metadata?.naturalHeight || node.height);
     const size = formatBytes(node.metadata?.bytes || 0);
-    return <span className="ml-auto max-w-full shrink-0 truncate rounded-[var(--r-sm)] bg-black/55 px-2 py-1 text-[var(--fs-label)] font-medium leading-none text-white backdrop-blur-sm">{width} x {height}{size ? ` · ${size}` : ""}</span>;
+    return <span className="ml-auto max-w-full shrink-0 truncate rounded-[var(--r-sm)] bg-black/70 px-2 py-1 text-[var(--fs-label)] font-medium leading-none text-white">{width} x {height}{size ? ` · ${size}` : ""}</span>;
 }
 
 function BatchPreviewImage({ node }: { node: CanvasNodeData }) {

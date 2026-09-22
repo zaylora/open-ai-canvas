@@ -38,6 +38,25 @@ export function useCanvasViewportController({
     setToolbarNodeId,
 }: UseCanvasViewportControllerOptions) {
     const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const canvasRectRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
+
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+        const updateRect = () => {
+            const rect = container.getBoundingClientRect();
+            canvasRectRef.current = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+        };
+        updateRect();
+        const resizeObserver = new ResizeObserver(updateRect);
+        resizeObserver.observe(container);
+        window.addEventListener("resize", updateRect);
+        return () => {
+            resizeObserver.disconnect();
+            window.removeEventListener("resize", updateRect);
+            canvasRectRef.current = null;
+        };
+    }, [containerRef]);
 
     const previewViewport = useCallback((next: ViewportTransform) => {
         viewportRef.current = next;
@@ -80,17 +99,17 @@ export function useCanvasViewportController({
     }, [agentCreatedNodes, containerRef, nodesRef, size, viewportRef, setSelectedNodeIds, setSelectedConnectionId, setContextMenu, setDialogNodeId, setToolbarNodeId, transitionViewportTo]);
 
     const screenToCanvas = useCallback((clientX: number, clientY: number): Position => {
-        const rect = containerRef.current?.getBoundingClientRect();
+        const rect = canvasRectRef.current;
         const viewport = viewportRef.current;
         const localX = clientX - (rect?.left || 0);
         const localY = clientY - (rect?.top || 0);
         return { x: (localX - viewport.x) / viewport.k, y: (localY - viewport.y) / viewport.k };
-    }, [containerRef, viewportRef]);
+    }, [viewportRef]);
 
     const getCanvasCenter = useCallback(() => {
-        const rect = containerRef.current?.getBoundingClientRect();
+        const rect = canvasRectRef.current;
         return screenToCanvas((rect?.left || 0) + (rect?.width || size.width) / 2, (rect?.top || 0) + (rect?.height || size.height) / 2);
-    }, [containerRef, screenToCanvas, size.height, size.width]);
+    }, [screenToCanvas, size.height, size.width]);
 
     const focusNodesInView = useCallback((targetNodes: CanvasNodeData[], maxScale = 1) => {
         const bounds = getCanvasNodesBounds(targetNodes);

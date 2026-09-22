@@ -52,9 +52,16 @@ export function shouldVirtualizeCanvasNodes(mode: CanvasMediaPerformanceMode, no
     return nodes.length > CANVAS_VIRTUALIZE_NODE_THRESHOLD;
 }
 
+/**
+ * 视口裁剪的进出边距，单位是屏幕像素（调用方再除以缩放换成世界坐标）。
+ *
+ * 入场边距原先是 128/192，在 0.6 倍缩放下只合 213/320 世界像素——比一个节点还窄，
+ * 等于节点刚碰到视口边缘才挂载，平移时就看到它「滑进来才出现」。放宽到约半屏，
+ * 让节点在进入可视区之前就挂好；离场边距同步放大，保持滞回避免边界抖动。
+ */
 export function canvasNodeRenderPadding(reduceMediaEffects: boolean, previouslyRendered: boolean) {
-    if (previouslyRendered) return reduceMediaEffects ? 640 : 384;
-    return reduceMediaEffects ? 128 : 192;
+    if (previouslyRendered) return reduceMediaEffects ? 1024 : 768;
+    return reduceMediaEffects ? 320 : 480;
 }
 
 export function canvasNodeRenderBudget(scale: number) {
