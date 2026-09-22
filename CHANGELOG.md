@@ -1,5 +1,16 @@
 ﻿# CHANGELOG
 
+## v1.5.7-zaylora.2
+
+- 画布连线改为全程由世界层 SVG 渲染，取消 SVG 与 Leafer canvas 之间的渲染介质切换；拖动节点时只更新受影响连线的路径与 16px 命中区，消除单击选中或拖拽时整块连线的闪烁与加粗。
+- 连线层 SVG 不再跟随视口重写 left/top/width/height/viewBox，布局盒子只由连线内容包围盒决定并在拖拽期间冻结，消除平移时的真实布局偏移（实测占 CLS 的 98.4%）。
+- 连线草稿末端订阅视口预览事件，边缘自动平移期间按最后一次指针屏幕坐标重算落点与倾斜锁定，草稿线不再随自动平移飘离指针。
+- 热路径不再强制同步布局：画布容器矩形由 ResizeObserver 缓存，screenToCanvas / getCanvasCenter 与图形层视口回调不再逐帧 getBoundingClientRect；FluidOrb 改由 ResizeObserver 推送尺寸，并按可见性与页面前后台门控 rAF。
+- 交互期降级世界层内部绘制（关闭 backdrop-filter、box-shadow、transition），世界层合成态只在缩放提交时重排版，纯平移保持 will-change: transform；移除资源标签与图片尺寸角标的常驻模糊层。
+- 图片资源放行结果记入模块级集合并移除重复的 loading="lazy" 门控，视口裁剪入场边距放宽到 320/480、离场 1024/768，避免节点重挂时退回占位图或出现空白。
+- 明确不做：给节点或世界层加 contain: paint，实测 p50 由 14.6ms 升至 20.3ms。
+- 验证：最新一轮本地通过类型检查、ESLint 与画布专项测试（canvas-paint-cost 等 51 项）；生产构建在前序提交通过。真实浏览器帧率、连线跟手、图片清晰度与显存占用仍按待测试清单验收，各提交的验证情况以其记录为准。
+
 ## v1.5.7-zaylora.1
 
 - zaylora fork 预发布版本，基线为上游 v1.5.7，在其之上包含本仓库自有的 27 个提交。
