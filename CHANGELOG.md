@@ -8,7 +8,8 @@
 - 图片放行记忆由「记住已放行的 url」升级为「记住 storageKey → {url, imageWidth}」：节点重挂时先用记忆地址渲染再后台静默刷新，不再空一帧退回占位图。
 - 升级注意：新策略要求显式配置 CDN 访问鉴权 `cdnAuthMode`（`public` 或 `qiniu`）才启用 CDN 交付，否则回落源站直连并标记 `cdn_auth_unconfigured`；开启 `requireCDN` 时直接返回 `resource_cdn_unconfigured`。只填了 CDN 域名而未设置该字段的部署，升级后图片会改走源站。
 - 随上游带入的能力：登录注册新增短信通知与组合验证、注册协议同意校验；云端 Agent 新增 `skill_search`、`canvas_inspect_image` 与 `canvas_arrange_nodes`，单步输出加上限与秒级墙钟，画布事件只下发几何增量，续轮交接改用有界结构化事实帧；技能种子同步 v2.0.0 并重组为开源域包与书籍域包、补齐演示媒体；画布默认使用黑色点网格，创作入口突出 Agent 主入口；作品保存恢复按原任务重试交付以避免重复生成计费；Live2D Cubism Core 运行库随部署发布；管理后台支持模型排序并提升运维信息密度。
-- 验证：合并期间后端 `go build ./...`、`go vet`、`go test ./internal/handler/` 与 `internal/app` 资源相关专项测试通过，前端 `tsc --noEmit`、生产构建、ESLint 与资源画布相关 108 项测试通过。本次发布仅同步版本元数据，未额外运行验证；真实 R2 + Cloudflare 交付、变体失败回退与原图下载路径仍按待测试清单验收。
+- 修复上游合并暴露的三处构建与检查问题：后端镜像在 `go mod download` 之前放置 vendored 的 `third_party/go-sms-sender`，否则 amd64 与 arm64 镜像都构建失败；插件计数测试按运行时口径计入内置短信插件；前端补齐 17 个文件的格式并把 Live2D Cubism Core 压缩产物移出格式检查，画布持久化一致性用例不再依赖真实资源访问接口。
+- 验证：GitHub Actions 全流程通过——后端 `go test ./...`、支付插件产物校验、前端格式与 `tsc --noEmit`、ESLint、全量测试与 Director Chrome E2E，以及 amd64 / arm64 后端镜像和 web 镜像的构建与 manifest 发布。真实 R2 + Cloudflare 交付、变体失败回退与原图下载路径仍按待测试清单验收。
 
 ## v1.5.7-zaylora.2
 
