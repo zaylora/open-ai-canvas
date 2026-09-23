@@ -397,6 +397,16 @@ async function runCanvasBatchCommitRace() {
     const harness = installStorageHarness();
     const previousScope = getActiveUserScope();
     let unregister: (() => void) | undefined;
+    // 生成结果的 storageKey 是 resource: 资源，展示地址要走后端 /resources/access 合同。
+    // Worker 没有可解析请求源，且本用例断言的是持久化竞态与用户编辑保留，与地址内容无关，
+    // 因此只挡下这一个端点并返回确定地址，其余请求仍按原路发出以暴露意外的网络依赖。
+    const { http } = await import("../../src/services/api/request");
+    const originalPost = http.post;
+    http.post = ((url: string, data?: unknown, config?: unknown) => {
+        if (url !== "/resources/access") return (originalPost as (url: string, data?: unknown, config?: unknown) => Promise<unknown>)(url, data, config);
+        const requested = Array.isArray(data) ? (data as Array<{ resourceId: string }>) : [];
+        return Promise.resolve({ items: requested.map((item) => ({ resourceId: item.resourceId, access: { url: `https://resources.test/${item.resourceId}` } })) });
+    }) as typeof http.post;
     try {
         setActiveUserScope("canvas-batch-commit-race");
         const { useCanvasStore, flushCanvasStorePersistence, CANVAS_STORE_KEY } = await import("../../src/stores/canvas/use-canvas-store");
@@ -460,6 +470,7 @@ async function runCanvasBatchCommitRace() {
         unregister?.();
         setActiveUserScope(previousScope);
         harness.restore();
+        http.post = originalPost;
     }
 }
 
