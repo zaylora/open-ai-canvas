@@ -3,7 +3,7 @@ import { nanoid } from "nanoid";
 
 import { getActiveUserScope } from "@/lib/user-scope";
 import { captureVideoPoster, detectVideoAudioTrackFromBlob } from "@/lib/video-poster";
-import { resourceFileUrl, resourceIdFromStorageKey, resourceStorageKey, ResourceUploadError, uploadResourceFile } from "@/services/api/resources";
+import { getResourceAccess, resolveResourceAccessURL, resourceFileUrl, resourceIdFromStorageKey, resourceStorageKey, ResourceUploadError, uploadResourceFile } from "@/services/api/resources";
 import { uploadImage, type UploadedImage } from "@/services/image-storage";
 import { getCachedResourceBlob, primeResourceBlobCache } from "@/services/resource-blob-cache";
 
@@ -111,20 +111,32 @@ export async function uploadMediaFile(input: Blob, prefix = "file", onProgress?:
     }
 }
 
-export async function resolveMediaUrl(storageKey?: string, fallback = "") {
-    if (!storageKey) return fallback;
+/**
+ * 展示用媒体地址及其实际交付宽度。
+ *
+ * imageWidth 入参是期望的变体宽度，后端按固定档位向上取整；存储配置不支持变体时回退原图。
+ * 返回的 imageWidth 是实际交付宽度，0 表示原图 —— 调用方据此判断量到的像素尺寸能否
+ * 当作资源真实尺寸回写。
+ */
+export async function resolveMediaAccess(storageKey?: string, fallback = "", imageWidth = 0): Promise<{ url: string; imageWidth: number }> {
+    if (!storageKey) return { url: fallback, imageWidth: 0 };
     const resourceId = resourceIdFromStorageKey(storageKey);
     if (resourceId) {
-        // 远程资源展示统一走稳定的云端/资源文件地址；Blob 缓存仅服务于字节读取和媒体处理。
-        return resourceFileUrl(resourceId);
+        // 展示直接命中 OSS/CDN；平台资源文件接口只保留给私有源站代理或本地存储兜底。
+        const access = await getResourceAccess(storageKey, "display", "original", "", imageWidth);
+        return { url: resolveResourceAccessURL(access.url), imageWidth: access.imageWidth || 0 };
     }
     const cached = objectUrls.get(storageKey);
-    if (cached) return cached;
+    if (cached) return { url: cached, imageWidth: 0 };
     const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback;
+    if (!blob) return { url: fallback, imageWidth: 0 };
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
-    return url;
+    return { url, imageWidth: 0 };
+}
+
+export async function resolveMediaUrl(storageKey?: string, fallback = "", imageWidth = 0) {
+    return (await resolveMediaAccess(storageKey, fallback, imageWidth)).url;
 }
 
 export async function getMediaBlob(storageKey: string) {

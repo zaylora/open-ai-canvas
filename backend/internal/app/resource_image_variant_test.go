@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"infinite-canvas/backend/internal/assets"
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/repository"
+	"infinite-canvas/backend/internal/storage"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -27,70 +29,70 @@ func TestNormalizeImageVariantWidthRoundsUpToBucket(t *testing.T) {
 		{width: 1601, want: 0},
 	}
 	for _, testCase := range cases {
-		if got := normalizeImageVariantWidth(testCase.width); got != testCase.want {
-			t.Fatalf("normalizeImageVariantWidth(%d) = %d, want %d", testCase.width, got, testCase.want)
+		if got := storage.NormalizeImageVariantWidth(testCase.width); got != testCase.want {
+			t.Fatalf("NormalizeImageVariantWidth(%d) = %d, want %d", testCase.width, got, testCase.want)
 		}
 	}
 }
 
 func TestNormalizeOSSSettingKeepsImageTransformOnlyForR2WithCDN(t *testing.T) {
 	base := ossSettingValue{Provider: s3Provider, S3Preset: "r2", CDNBaseURL: "https://media.example.com", ImageTransform: true}
-	if got := normalizeOSSSetting(base); !got.ImageTransform {
+	if got := storage.NormalizeSettings(base); !got.ImageTransform {
 		t.Fatalf("ImageTransform = false, want true for R2 with CDN")
 	}
 
 	noCDN := base
 	noCDN.CDNBaseURL = ""
-	if got := normalizeOSSSetting(noCDN); got.ImageTransform {
+	if got := storage.NormalizeSettings(noCDN); got.ImageTransform {
 		t.Fatalf("ImageTransform = true, want false without CDN base URL")
 	}
 
 	otherPreset := base
 	otherPreset.S3Preset = "aws"
-	if got := normalizeOSSSetting(otherPreset); got.ImageTransform {
+	if got := storage.NormalizeSettings(otherPreset); got.ImageTransform {
 		t.Fatalf("ImageTransform = true, want false for non-R2 S3 preset")
 	}
 
 	otherProvider := base
 	otherProvider.Provider = aliyunOSSProvider
-	if got := normalizeOSSSetting(otherProvider); got.ImageTransform {
+	if got := storage.NormalizeSettings(otherProvider); got.ImageTransform {
 		t.Fatalf("ImageTransform = true, want false for non-S3 provider")
 	}
 }
 
-func TestOSSImageVariantURLBuildsCloudflarePath(t *testing.T) {
+func TestImageVariantURLBuildsCloudflarePath(t *testing.T) {
 	setting := ossSettingValue{Provider: s3Provider, S3Preset: "r2", CDNBaseURL: "https://media.example.com", ImageTransform: true}
-	got, ok := ossImageVariantURL(setting, "open-ai-canvas/users/u1/image/a.png", 900)
+	got, ok := storage.ImageVariantURL(setting, "open-ai-canvas/users/u1/image/a.png", 900)
 	if !ok {
-		t.Fatalf("ossImageVariantURL() ok = false, want true")
+		t.Fatalf("ImageVariantURL() ok = false, want true")
 	}
 	want := "https://media.example.com/cdn-cgi/image/width=960,quality=82,format=auto/open-ai-canvas/users/u1/image/a.png"
 	if got != want {
-		t.Fatalf("ossImageVariantURL() = %q, want %q", got, want)
+		t.Fatalf("ImageVariantURL() = %q, want %q", got, want)
 	}
 }
 
-func TestOSSImageVariantURLRefusesUnsupportedSettings(t *testing.T) {
+func TestImageVariantURLRefusesUnsupportedSettings(t *testing.T) {
 	enabled := ossSettingValue{Provider: s3Provider, S3Preset: "r2", CDNBaseURL: "https://media.example.com", ImageTransform: true}
 
 	disabled := enabled
 	disabled.ImageTransform = false
-	if _, ok := ossImageVariantURL(disabled, "a.png", 960); ok {
-		t.Fatalf("ossImageVariantURL() ok = true, want false when transform disabled")
+	if _, ok := storage.ImageVariantURL(disabled, "a.png", 960); ok {
+		t.Fatalf("ImageVariantURL() ok = true, want false when transform disabled")
 	}
 
-	// 开关为真但配置已不满足前提：normalizeOSSSetting 必须在这里再次兜底。
+	// 开关为真但配置已不满足前提：SupportsImageTransform 必须在这里再次兜底。
 	staleSwitch := enabled
 	staleSwitch.S3Preset = "aws"
-	if _, ok := ossImageVariantURL(staleSwitch, "a.png", 960); ok {
-		t.Fatalf("ossImageVariantURL() ok = true, want false for non-R2 preset")
+	if _, ok := storage.ImageVariantURL(staleSwitch, "a.png", 960); ok {
+		t.Fatalf("ImageVariantURL() ok = true, want false for non-R2 preset")
 	}
 
-	if _, ok := ossImageVariantURL(enabled, "a.png", 0); ok {
-		t.Fatalf("ossImageVariantURL() ok = true, want false for zero width")
+	if _, ok := storage.ImageVariantURL(enabled, "a.png", 0); ok {
+		t.Fatalf("ImageVariantURL() ok = true, want false for zero width")
 	}
-	if _, ok := ossImageVariantURL(enabled, "   ", 960); ok {
-		t.Fatalf("ossImageVariantURL() ok = true, want false for empty object key")
+	if _, ok := storage.ImageVariantURL(enabled, "   ", 960); ok {
+		t.Fatalf("ImageVariantURL() ok = true, want false for empty object key")
 	}
 }
 
@@ -128,6 +130,9 @@ func seedPlatformR2Location(t *testing.T, db *gorm.DB, snapshotTransform bool, c
 		CDNBaseURL:      "https://media.example.com",
 		AccessKeyID:     "ak-test",
 		AccessKeySecret: "sk-plaintext",
+		// 变体地址是公开的 Cloudflare 代理路径，必须同时声明 CDN 访问鉴权方式，
+		// 否则新的交付策略会判定 CDN 未配置而回落源站。
+		Delivery: storage.DeliverySettings{CDNAuthMode: "public"},
 	}
 
 	snapshot := base
@@ -203,36 +208,66 @@ func TestOSSSettingForResourceTakesImageTransformFromCurrentSetting(t *testing.T
 	}
 }
 
-// TestPrepareResourceDeliveryRedirectsToVariant 端到端确认浏览器请求落在 /cdn-cgi/image，
+// TestResourceAccessDeliversVariant 端到端确认浏览器展示落在 /cdn-cgi/image，
 // 而不是 CDN 原图地址。ImageWidth 由 handler 的 variant=preview&w= 解析而来。
-func TestPrepareResourceDeliveryRedirectsToVariant(t *testing.T) {
+func TestResourceAccessDeliversVariant(t *testing.T) {
 	service, db := newVariantDeliveryTestService(t)
 	location := seedPlatformR2Location(t, db, false, true)
 	resource := seedR2Resource(t, db, "user-1", location.ID)
 
-	delivery, err := service.prepareResourceDelivery("user-1", resource, ResourceDeliveryOptions{ForceDirect: true, ImageWidth: 960})
+	access, err := service.resolveResourceAccess(resource, ResourceAccessOptions{Purpose: assets.PurposeDisplay, Variant: assets.VariantOriginal, ImageWidth: 960})
 	if err != nil {
-		t.Fatalf("prepareResourceDelivery: %v", err)
+		t.Fatalf("resolveResourceAccess: %v", err)
 	}
 	want := "https://media.example.com/cdn-cgi/image/width=960,quality=82,format=auto/open-ai-canvas/users/u1/image/a.png"
-	if delivery.RedirectURL != want {
-		t.Fatalf("RedirectURL = %q, want %q", delivery.RedirectURL, want)
+	if access.URL != want {
+		t.Fatalf("URL = %q, want %q", access.URL, want)
+	}
+	if access.Delivery != assets.DeliveryCDN {
+		t.Fatalf("Delivery = %q, want %q", access.Delivery, assets.DeliveryCDN)
+	}
+	// 交付宽度必须回报给调用方：前端据此判断量到的像素不是资源真实尺寸。
+	if access.ImageWidth != 960 {
+		t.Fatalf("ImageWidth = %d, want 960", access.ImageWidth)
 	}
 }
 
-// TestPrepareResourceDeliveryKeepsOriginalWhenTransformOff 开关关闭时必须退回 CDN 原图，
+// TestResourceAccessKeepsOriginalWhenTransformOff 开关关闭时必须退回 CDN 原图，
 // 不能因为修复了同步就让所有部署都开始走 /cdn-cgi/image（那会产生计费转换）。
-func TestPrepareResourceDeliveryKeepsOriginalWhenTransformOff(t *testing.T) {
+func TestResourceAccessKeepsOriginalWhenTransformOff(t *testing.T) {
 	service, db := newVariantDeliveryTestService(t)
 	location := seedPlatformR2Location(t, db, true, false)
 	resource := seedR2Resource(t, db, "user-1", location.ID)
 
-	delivery, err := service.prepareResourceDelivery("user-1", resource, ResourceDeliveryOptions{ForceDirect: true, ImageWidth: 960})
+	access, err := service.resolveResourceAccess(resource, ResourceAccessOptions{Purpose: assets.PurposeDisplay, Variant: assets.VariantOriginal, ImageWidth: 960})
 	if err != nil {
-		t.Fatalf("prepareResourceDelivery: %v", err)
+		t.Fatalf("resolveResourceAccess: %v", err)
 	}
 	want := "https://media.example.com/open-ai-canvas/users/u1/image/a.png"
-	if delivery.RedirectURL != want {
-		t.Fatalf("RedirectURL = %q, want %q", delivery.RedirectURL, want)
+	if access.URL != want {
+		t.Fatalf("URL = %q, want %q", access.URL, want)
+	}
+	if access.ImageWidth != 0 {
+		t.Fatalf("ImageWidth = %d, want 0 when transform is off", access.ImageWidth)
+	}
+}
+
+// TestResourceAccessKeepsOriginalForNonDisplayPurpose 导出与模型输入必须拿到原图：
+// 变体只服务浏览器展示，不能让下载或上游读取到缩放后的字节。
+func TestResourceAccessKeepsOriginalForNonDisplayPurpose(t *testing.T) {
+	service, db := newVariantDeliveryTestService(t)
+	location := seedPlatformR2Location(t, db, false, true)
+	resource := seedR2Resource(t, db, "user-1", location.ID)
+
+	access, err := service.resolveResourceAccess(resource, ResourceAccessOptions{Purpose: assets.PurposeCopy, Variant: assets.VariantOriginal, ImageWidth: 960})
+	if err != nil {
+		t.Fatalf("resolveResourceAccess: %v", err)
+	}
+	want := "https://media.example.com/open-ai-canvas/users/u1/image/a.png"
+	if access.URL != want {
+		t.Fatalf("URL = %q, want %q", access.URL, want)
+	}
+	if access.ImageWidth != 0 {
+		t.Fatalf("ImageWidth = %d, want 0 for non-display purpose", access.ImageWidth)
 	}
 }

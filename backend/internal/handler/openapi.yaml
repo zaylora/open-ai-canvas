@@ -1042,6 +1042,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
+  /resources/access:
+    post:
+      tags: [resources]
+      summary: 批量签发当前用户资源访问描述
+      description: 统一处理展示、下载、复制、浏览器字节处理和模型输入；客户端不能通过查询参数选择 direct/proxy。每项独立成功或失败。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              minItems: 1
+              maxItems: 100
+              items:
+                type: object
+                required: [resourceId]
+                properties:
+                  resourceId: {type: string}
+                  purpose: {type: string, enum: [display, copy, download, browser-process, provider-input], default: display}
+                  variant: {type: string, enum: [original, playback], default: original}
+                  imageWidth: {type: integer, minimum: 0, description: "期望的图片展示宽度；服务端按固定档位（320/640/960/1600）向上取整，超出最大档位或存储不支持变体时回退原图。仅 purpose=display 生效。响应的 access.imageWidth 是实际交付宽度，0 表示原图。"}
+      responses:
+        "200":
+          $ref: "#/components/responses/Envelope"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
   /resources/{id}/file:
     get:
       tags: [resources]
@@ -1051,6 +1079,21 @@ paths:
           name: id
           required: true
           schema: { type: string }
+        - in: query
+          name: access
+          schema: { type: string, enum: ["1"] }
+          description: 仅返回统一访问描述，不返回文件正文。
+        - in: query
+          name: variant
+          schema: { type: string, enum: [original, playback, preview], default: original }
+          description: preview 表示图片宽度变体，需配合 w 使用；归一为 original 后按 w 签发缩放地址。
+        - in: query
+          name: w
+          schema: { type: integer, minimum: 1 }
+          description: 仅 variant=preview 时生效的期望宽度，服务端按固定档位向上取整。
+        - in: query
+          name: purpose
+          schema: { type: string, enum: [display, download, browser-process], default: display }
       responses:
         "200":
           description: 文件流
@@ -1066,6 +1109,25 @@ paths:
         "200":
           $ref: "#/components/responses/Envelope"
         "400":
+          $ref: "#/components/responses/Error"
+  /tasks/{id}/recover-media:
+    post:
+      tags: [tasks]
+      summary: 按原任务 ID 重试作品保存，不重新生成或创建计费订单
+      description: 仅当前用户有恢复记录的保存失败任务可重入队；已在队列或运行中时幂等返回。每任务最多手动恢复三次，间隔至少一分钟。已取消、已退款或归属项目不可用时拒绝。
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Envelope"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
   /tasks/{id}/text-events:
     get:
@@ -1090,6 +1152,65 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/Envelope"
+  /assets/batch-delete:
+    post:
+      tags: [assets]
+      summary: 批量彻底删除当前用户素材
+      description: 顶层 JSON 数组，一次请求、一个数据库事务。所有 ID 必须属于当前用户，不受任务、画布或历史引用阻塞；共享文件保留，其余通过 Outbox 异步清理，失败重试。任一素材不存在、越权或数据库写入失败时整批不删除。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              minItems: 1
+              maxItems: 1000
+              items:
+                type: string
+                minLength: 1
+            example: ["asset-1", "asset-2"]
+      responses:
+        "200":
+          description: 成功信封，data.ids 返回本次请求的素材 ID 数组；物理文件清理由后台执行。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [ids]
+                        properties:
+                          ids:
+                            type: array
+                            items: { type: string }
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /assets/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [assets]
+      summary: 彻底删除当前用户素材
+      description: 不依赖素材 archived 状态，也不受画布、任务、项目或历史快照引用阻塞；其他素材共享的物理对象仍保留。
+      responses:
+        "200":
+          $ref: "#/components/responses/Envelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
 components:
   parameters:
     AgentRunID:

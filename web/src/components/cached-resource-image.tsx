@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ImgHTMLAttributes, type ReactNode } from "react";
 
-import { imagePreviewUrl } from "@/lib/canvas/image-variant";
-import { resourceFileUrl, resourceIdFromStorageKey } from "@/services/api/resources";
+import { getResourceAccess, resolveResourceAccessURL, resourceIdFromStorageKey } from "@/services/api/resources";
 import { resolveImageUrl } from "@/services/image-storage";
 
 type CachedResourceImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> & {
@@ -18,7 +17,7 @@ type CachedResourceImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src">
 };
 
 /**
- * 远程资源图片统一使用稳定的资源文件地址。
+ * 远程资源图片统一使用 OSS/CDN 授权地址。
  * Blob 缓存仍可用于导出、抽帧等字节处理，但不作为媒体展示 src，避免把
  * `blob:http(s)://...` 泄露到节点、素材库和浏览器媒体链路中。
  */
@@ -67,8 +66,14 @@ export function CachedResourceImage({ storageKey, src = "", fallback = null, loa
                     cancelled = true;
                 };
             }
-            const originUrl = resourceFileUrl(resourceId);
-            setCachedSrc(variantWidth && !variantFailed ? imagePreviewUrl(originUrl, variantWidth) : originUrl);
+            // 变体宽度交给后端按档位签发；退回原图时传 0，避免再次命中失败的变体地址。
+            void getResourceAccess(storageKey, "display", "original", "", variantFailed ? 0 : variantWidth || 0)
+                .then((access) => {
+                    if (!cancelled) setCachedSrc(resolveResourceAccessURL(access.url));
+                })
+                .catch(() => {
+                    if (!cancelled) setCacheFailed(true);
+                });
             return () => {
                 cancelled = true;
             };

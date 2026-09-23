@@ -127,8 +127,8 @@ describe("连线跟随世界层，不靠视口大小的 canvas", () => {
 
 describe("图片不因节点重挂退回占位", () => {
     test("放行过的资源地址被记住，重挂直接给 url", () => {
-        expect(canvasNodeContentSource).toContain("const ready = eager || unlockedResourceUrls.has(resolvedUrl);");
-        expect(canvasNodeContentSource).toContain("if (ready) unlockResourceUrl(resolvedUrl);");
+        expect(canvasNodeContentSource).toContain("const ready = eager || Boolean(rememberedUrl);");
+        expect(canvasNodeContentSource).toContain("rememberResourceUrl(storageKey, resolved.url, resolved.imageWidth);");
     });
 
     test("不再叠浏览器自己的 loading=lazy", () => {

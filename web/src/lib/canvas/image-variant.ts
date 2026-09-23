@@ -6,7 +6,7 @@
  * 不认识的地址一律原样返回，宁可加载原图也不要拼出 404。
  */
 
-/** 允许的变体宽度档位，必须与后端 backend/internal/app/resource_image_variant.go 的 imageVariantWidths 一致。 */
+/** 允许的变体宽度档位，必须与后端 backend/internal/storage/delivery.go 的 imageVariantWidths 一致。 */
 export const IMAGE_VARIANT_WIDTHS = [320, 640, 960, 1600] as const;
 
 /** 画布节点的展示宽度档位：节点最大约 640 逻辑像素，留一档给高 DPI 屏。 */
