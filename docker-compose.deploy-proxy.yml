@@ -1,0 +1,105 @@
+# 供 Host Updater 使用的自包含部署编排：docker-compose.deploy.yml 的全部内容 + Caddy 反代。
+# 更新器只接受单个 -f，且会用本文件覆盖服务器上的同名文件，因此服务器端的部署定制必须写在这里，
+# 不能留在服务器本地，否则第一次自动部署就会被覆盖掉。
+# 与 docker-compose.deploy.yml 的差异仅有三处：镜像指向本仓库的 GHCR、web 只绑定回环地址、追加 caddy。
+# docker-compose.deploy.yml 变更时需要同步本文件。
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-open_ai_canvas}
+      POSTGRES_USER: ${POSTGRES_USER:-open_ai_canvas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先运行一键部署脚本生成数据库密码}
+    volumes:
+      - ${CANVAS_POSTGRES_DATA_PATH:-postgres-data}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - ${CANVAS_REDIS_DATA_PATH:-redis-data}:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    image: ghcr.io/zaylora/open-ai-canvas-backend:${CANVAS_IMAGE_TAG:-latest}
+    command: ["migrate-schema", "up"]
+    environment:
+      CANVAS_BACKEND_DATA_DIR: /data
+      CANVAS_DATABASE_DRIVER: postgres
+      DATABASE_URL: ${DATABASE_URL:?请先运行一键部署脚本生成数据库连接}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    image: ghcr.io/zaylora/open-ai-canvas-backend:${CANVAS_IMAGE_TAG:-latest}
+    environment:
+      CANVAS_BACKEND_ADDR: ":8080"
+      CANVAS_BACKEND_DATA_DIR: /data
+      CANVAS_AUTO_MIGRATE: "false"
+      CANVAS_SHUTDOWN_TIMEOUT: ${CANVAS_SHUTDOWN_TIMEOUT:-10m}
+      CANVAS_DATABASE_DRIVER: postgres
+      DATABASE_URL: ${DATABASE_URL:?请先运行一键部署脚本生成数据库连接}
+      REDIS_URL: redis://redis:6379/0
+      CANVAS_WORKER_CONCURRENCY: ${CANVAS_WORKER_CONCURRENCY:-3}
+      CANVAS_CHANNEL_CONCURRENCY: ${CANVAS_CHANNEL_CONCURRENCY:-3}
+      CANVAS_REGISTRATION_ENABLED: ${CANVAS_REGISTRATION_ENABLED:-false}
+      CANVAS_ALLOW_PRIVATE_UPSTREAMS: ${CANVAS_ALLOW_PRIVATE_UPSTREAMS:-false}
+      CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS: ${CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS:-}
+      CANVAS_CORS_ORIGINS: ${CANVAS_CORS_ORIGINS:-}
+      CANVAS_PUBLIC_BASE_URL: ${CANVAS_PUBLIC_BASE_URL:-}
+      CANVAS_UPDATER_SOCKET: /run/open-ai-canvas-updater/updater.sock
+      CANVAS_UPDATER_TOKEN: ${CANVAS_UPDATER_TOKEN:-}
+      GIN_MODE: release
+    volumes:
+      - ${CANVAS_DATA_PATH:-backend-data}:/data
+      - ${CANVAS_UPDATER_SOCKET_DIR:-/run/open-ai-canvas-updater}:/run/open-ai-canvas-updater
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: ${CANVAS_SHUTDOWN_TIMEOUT:-10m}
+
+  web:
+    image: ghcr.io/zaylora/open-ai-canvas-web:${CANVAS_IMAGE_TAG:-latest}
+    ports:
+      - "127.0.0.1:${CANVAS_HTTP_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  backend-data:
+  postgres-data:
+  redis-data:
+  caddy-data:
+  caddy-config:

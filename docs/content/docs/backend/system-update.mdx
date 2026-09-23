@@ -65,6 +65,45 @@ Go 检查显式使用 `backend/go.sum` 作为缓存依赖键，并上传 `go-tes
 
 这套发布流程依赖仓库可使用 GitHub 原生 ARM64 Runner、GHCR 写权限以及构建/下载 artifact 能力。首次上线应核对实际 Runner 排队情况、双架构 manifest、main/tag 同 SHA 复用和质量失败阻断；本地测试不能代替这些云端验收。工作流变更不迁移业务数据库，也不修改服务器 Compose 或数据卷。需要回退 CI 时只回退工作流和 Dockerfile 改动；已发布镜像不会自动撤回，线上版本回退仍按本文的备份与迁移约束执行。
 
+## 发布后自动部署
+
+`v*` 标签发布成功后，`publish-images.yml` 的 `deploy` 作业通过 SSH 触发服务器上的 Host Updater，把本文前述的备份、迁移、健康验证和自动回退流程跑完。CI 只负责触发和等待：工作流不接触 Docker、数据库、Compose 文件和数据卷，失败回滚仍由宿主机完成。
+
+部署只在 `refs/tags/v*` 上运行，并且需要仓库变量 `CANVAS_DEPLOY_ENABLED=true` 才启用；变量留空时作业跳过，不影响镜像发布和 Release。`main` 推送不触发部署：其镜像没有对应 Release，也不满足更新器“目标版本必须高于当前版本”的约束。
+
+### 服务器前置条件
+
+1. 已按上一节安装 `open-ai-canvas-updater`，`.env` 的 `CANVAS_IMAGE_TAG` 固定为具体版本而不是 `latest`。
+2. 更新器环境文件中的 `CANVAS_UPDATER_REPOSITORY` 指向实际发布仓库。该值默认是上游 `ddcat-ai/open-ai-canvas`，Fork 部署若不修改，更新器永远读不到本仓库的 Release；部署脚本会先比对它并直接失败退出。
+3. 为 CI 建立独立部署账号，公钥写入其 `~/.ssh/authorized_keys`，并确认该账号能读写 `/run/open-ai-canvas-updater/updater.sock`。更新器把 Socket 建为 `0666`，普通账号即可访问，不需要给 CI 账号 sudo 或 Docker 权限。
+
+### 仓库配置
+
+| 名称 | 类型 | 说明 |
+| --- | --- | --- |
+| `CANVAS_DEPLOY_ENABLED` | Variable | 设为 `true` 才启用部署作业 |
+| `DEPLOY_SSH_HOST` | Secret | 服务器地址 |
+| `DEPLOY_SSH_USER` | Secret | 部署账号 |
+| `DEPLOY_SSH_KEY` | Secret | 部署账号私钥，使用仅用于部署的专用密钥 |
+| `DEPLOY_SSH_KNOWN_HOSTS` | Secret | `ssh-keyscan -p <端口> <主机>` 的输出 |
+| `DEPLOY_UPDATER_TOKEN` | Secret | 服务器 `.env` 中的 `CANVAS_UPDATER_TOKEN` |
+| `DEPLOY_SSH_PORT` | Variable | 可选，默认 `22` |
+| `DEPLOY_UPDATER_SOCKET` | Variable | 可选，默认 `/run/open-ai-canvas-updater/updater.sock` |
+| `DEPLOY_TIMEOUT_SECONDS` | Variable | 可选，默认 `2700` |
+
+工作流固定 `StrictHostKeyChecking=yes` 且只信任 `DEPLOY_SSH_KNOWN_HOSTS`，不接受首次连接自动信任。更新器 Token 经 stdin 交给远端 `curl --config -`，不出现在命令行、环境变量和服务器进程列表中，也不落到服务器磁盘。
+
+`deploy` 作业绑定 `production` 环境，可在环境设置中追加必需审批人，把自动部署改成发布后人工确认。同一时间只允许一次部署（`concurrency: deploy-production`）。
+
+### 部署步骤与失败语义
+
+1. 读 `/v1/status`：核对更新器监听的仓库和当前版本；已经是目标版本则直接成功跳过，重跑发布不会重复部署。
+2. 轮询 `/v1/check`，直到更新器把本次标签选为最新 Release。Release 刚发布时存在可见性延迟，默认重试 6 次。更新器按语义版本取最高的非草稿 Release，仓库里存在更高版本的 Release 时本次部署会失败退出。
+3. `POST /v1/update` 触发更新，随后轮询 `/v1/status`，逐条输出宿主机日志。
+4. 终态映射：`succeeded` 成功；`rolled_back`、`failed` 和 `manual_intervention` 失败并打印更新器给出的错误原因。`manual_intervention` 表示回滚也没有完成，服务可能不可用，必须登录服务器处理。
+
+更新器在成功后约 1 秒会重启自身以同步二进制，因此作业读到 `succeeded` 后立即停止轮询。服务切换期间的偶发连接失败会继续重试，只有连续读不到状态或超过超时才判定失败。CI 超时不会中断宿主机上的更新，此时应登录服务器用 `journalctl` 确认最终结果，而不是重跑工作流。
+
 ## 运维检查
 
 ```bash

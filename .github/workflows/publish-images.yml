@@ -216,3 +216,34 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --notes-file dist/RELEASE_NOTES.md \
             "${prerelease_args[@]}"
+
+  deploy:
+    name: Deploy to server
+    # 只有版本 Release 发布成功后才部署：Host Updater 从 GitHub Releases 取目标版本，
+    # main 的镜像既没有 Release，也不满足"目标版本必须高于当前版本"的约束。
+    # 服务器接入完成前把仓库变量 CANVAS_DEPLOY_ENABLED 留空即可跳过，不会让发布变红。
+    if: startsWith(github.ref, 'refs/tags/v') && vars.CANVAS_DEPLOY_ENABLED == 'true'
+    needs: [prepare, release]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    # 同一台服务器同时只允许一次部署，并发触发会被更新器直接拒绝。
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trigger host updater
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          DEPLOY_UPDATER_TOKEN: ${{ secrets.DEPLOY_UPDATER_TOKEN }}
+          # 未配置的仓库变量会展开成空字符串，由脚本回退到默认端口和 Socket 路径。
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+          DEPLOY_UPDATER_SOCKET: ${{ vars.DEPLOY_UPDATER_SOCKET }}
+          DEPLOY_TIMEOUT_SECONDS: ${{ vars.DEPLOY_TIMEOUT_SECONDS }}
+          TARGET_VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash .github/scripts/deploy-release.sh
