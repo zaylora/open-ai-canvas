@@ -1,5 +1,15 @@
 ﻿# CHANGELOG
 
+## v1.5.7-zaylora.3
+
+- 合并上游 `ddcat-ai/open-ai-canvas` main 的 75 个提交（分叉点 `c5b81f69`），14 个冲突文件全部人工合并：保留本仓库的画布性能优化（可见节点提前返回、图片放行记忆、变体档位），吸收上游修复（可见性预算不再裁掉屏内节点、视频首帧提取、Agent 循环止损、素材批量删除刷新等）。
+- 资源出口统一到上游的访问策略 `assets.ResolveAccess`：CDN 读取签名与源站降级边界收敛为一处，媒体经签名地址直连下载，不再由浏览器代理转发。
+- 本仓库的图片宽度变体按新契约移植进 `internal/storage`（`ImageVariantURL` / `NormalizeImageVariantWidth` / `SupportsImageTransform`），`assets.AccessOptions.ImageWidth` 作为请求宽度进入统一访问策略，仅 `purpose=display` 且 `variant=original` 生效；导出、复制到剪贴板和模型输入强制取原图。`ResourceAccess.ImageWidth` 回报实际交付宽度，前端据此不把变体尺寸写回节点比例。
+- 图片放行记忆由「记住已放行的 url」升级为「记住 storageKey → {url, imageWidth}」：节点重挂时先用记忆地址渲染再后台静默刷新，不再空一帧退回占位图。
+- 升级注意：新策略要求显式配置 CDN 访问鉴权 `cdnAuthMode`（`public` 或 `qiniu`）才启用 CDN 交付，否则回落源站直连并标记 `cdn_auth_unconfigured`；开启 `requireCDN` 时直接返回 `resource_cdn_unconfigured`。只填了 CDN 域名而未设置该字段的部署，升级后图片会改走源站。
+- 随上游带入的能力：登录注册新增短信通知与组合验证、注册协议同意校验；云端 Agent 新增 `skill_search`、`canvas_inspect_image` 与 `canvas_arrange_nodes`，单步输出加上限与秒级墙钟，画布事件只下发几何增量，续轮交接改用有界结构化事实帧；技能种子同步 v2.0.0 并重组为开源域包与书籍域包、补齐演示媒体；画布默认使用黑色点网格，创作入口突出 Agent 主入口；作品保存恢复按原任务重试交付以避免重复生成计费；Live2D Cubism Core 运行库随部署发布；管理后台支持模型排序并提升运维信息密度。
+- 验证：合并期间后端 `go build ./...`、`go vet`、`go test ./internal/handler/` 与 `internal/app` 资源相关专项测试通过，前端 `tsc --noEmit`、生产构建、ESLint 与资源画布相关 108 项测试通过。本次发布仅同步版本元数据，未额外运行验证；真实 R2 + Cloudflare 交付、变体失败回退与原图下载路径仍按待测试清单验收。
+
 ## v1.5.7-zaylora.2
 
 - 画布连线改为全程由世界层 SVG 渲染，取消 SVG 与 Leafer canvas 之间的渲染介质切换；拖动节点时只更新受影响连线的路径与 16px 命中区，消除单击选中或拖拽时整块连线的闪烁与加粗。
