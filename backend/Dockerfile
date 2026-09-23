@@ -40,6 +40,9 @@ RUN apk add --no-cache build-base
 
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
+# go.mod 用 replace 把 go-sms-sender 指向仓库内的 third_party 副本，
+# 该目录必须先于 go mod download 就位，否则模块图解析不到本地路径。
+COPY backend/third_party ./third_party
 # 模块保留在普通镜像层中，供后续编译及跨 Runner 的 GHA 层缓存复用。
 RUN go mod download
 COPY backend ./
