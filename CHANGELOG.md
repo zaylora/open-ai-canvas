@@ -1,5 +1,13 @@
 ﻿# CHANGELOG
 
+## v1.5.7-zaylora.4
+
+- 发布流水线新增 `deploy` 作业：`v*` 标签发布成功后经 SSH 触发服务器上的 Host Updater 完成部署，沿用既有的数据库备份、独立迁移、健康验证稳定窗口与失败自动回滚，CI 不接触 Docker、数据库和数据卷。作业由仓库变量 `CANVAS_DEPLOY_ENABLED` 控制，未开启时跳过，不影响镜像发布与 Release。
+- 部署逻辑集中在 `.github/scripts/deploy-release.sh`：先核对更新器监听的仓库归属，已是目标版本则幂等跳过，等待 Release 可见后触发更新并逐条输出宿主机日志。`rolled_back`、`failed` 与 `manual_intervention` 均判为失败；读到 `succeeded` 立即结束轮询，避开更新器成功后约一秒的自重启。更新器 Token 经 stdin 交给远端 `curl --config -`，不出现在命令行、环境变量和服务器进程列表中，SSH 固定严格主机校验。
+- 新增 `docker-compose.deploy-proxy.yml`：在部署编排基础上纳入 Caddy 反代，供 `CANVAS_UPDATER_COMPOSE_FILE` 指定。更新器只接受单个 `-f` 且会整份覆盖服务器上的同名文件，叠加式 proxy 编排会被 `--remove-orphans` 当作孤儿容器删除，因此把镜像归属、web 回环绑定与反代定义一并固化进该文件；不设顶层 `name`，Compose 项目名仍取目录名，现有证书卷原样沿用。
+- 文档：`docs/content/docs/backend/system-update.mdx` 补充发布后自动部署的服务器前置条件、仓库 Secrets 与 Variables、部署步骤与失败语义。
+- 验证：actionlint 对工作流零报错；部署脚本以假 SSH 回放更新器响应演练六条路径（正常发布、迁移失败自动回滚、Release 尚未可见时重试、已是目标版本跳过、更新器仓库不匹配拒绝、状态持续不可读），并用真实 curl 校验请求体与 Token 头的转义还原；合并编排经结构校验确认服务、卷、依赖与现网定义逐字一致。真实 SSH 链路与首次自动部署仍按待测试清单验收。
+
 ## v1.5.7-zaylora.3
 
 - 合并上游 `ddcat-ai/open-ai-canvas` main 的 75 个提交（分叉点 `c5b81f69`），14 个冲突文件全部人工合并：保留本仓库的画布性能优化（可见节点提前返回、图片放行记忆、变体档位），吸收上游修复（可见性预算不再裁掉屏内节点、视频首帧提取、Agent 循环止损、素材批量删除刷新等）。
