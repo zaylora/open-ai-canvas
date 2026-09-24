@@ -2891,10 +2891,13 @@ Leafer 图形层随之只剩浮层职责（框选框、选中边界、连线草�
 - [x] 本地用假 `ssh` 回放更新器响应，演练六条路径：正常发布至 `succeeded`、迁移失败自动回滚、Release 尚未可见时重试、服务器已是目标版本则跳过、更新器仓库不匹配拒绝部署、状态持续读不到判失败。
 - [x] 用真实 `curl --config -` 验证请求体与 Token 头的转义还原，确认 `{"targetVersion":"..."}` 被正确送达，Token 不进入命令行。
 
-仍待真实环境验收：
+真实环境验收（`v1.5.7-zaylora.5`，生产服务器）：
 
-- [ ] 服务器侧确认 `CANVAS_UPDATER_REPOSITORY` 已改为实际发布仓库，否则更新器读的仍是上游 Release。
-- [ ] 用专用部署账号验证免 sudo 读写 `/run/open-ai-canvas-updater/updater.sock`，以及 `DEPLOY_SSH_KNOWN_HOSTS` 下的严格主机校验能正常连接。
-- [ ] 打一个真实标签走完整链路，确认 Release 发布后更新器能在重试窗口内读到该版本，并核对备份产生、迁移执行与健康验证通过。
-- [ ] 验证失败路径：构造一次迁移失败，确认自动回滚后工作流失败退出且日志给出更新器的错误原因。
-- [ ] 确认更新器成功后自重启不会把作业判成失败，以及重跑同一标签会走「已是目标版本」跳过分支。
+- [x] 部署账号 `canvas-deploy` 免 sudo 读写 `/run/open-ai-canvas-updater/updater.sock`，`DEPLOY_SSH_KNOWN_HOSTS` 下的严格主机校验正常连接。
+- [x] 更新器 `CANVAS_UPDATER_REPOSITORY` 指向本仓库，只读检查读到本仓库 Release，含预发布后缀的版本比较正确（`updateAvailable: true`）。
+- [x] 完整链路走通：`v1.5.7-zaylora.3` → `v1.5.7-zaylora.5`，阶段依次为 preflight、backing_up、pulling、draining、migrating、switching、verifying、succeeded，全程约 90 秒；生成备份 `backup-20260924-015705`，`rollbackVersion` 记录为更新前版本。
+- [x] 反向代理未被 `--remove-orphans` 删除，HTTPS 入口在更新后立即可用，证书卷因项目名不变而沿用。
+- [x] 更新器成功后自重启未被判成失败：作业读到 `succeeded` 即结束轮询。
+- [ ] 失败路径未验证：尚未构造迁移失败来确认自动回滚后工作流失败退出、且日志给出更新器的错误原因。该路径目前只有本地假 SSH 演练覆盖。
+- [ ] 幂等跳过分支未在真实环境验证：重跑同一标签应走「已是目标版本」直接成功，目前只有本地演练覆盖。
+- [ ] 首次部署前 `CANVAS_DEPLOY_ENABLED` 的生效时机已确认为**工作流运行创建时快照**：开关在 run 创建后才打开时，该轮的 `deploy` 作业仍会跳过，需重新触发。此结论来自一次实际观察，未做多次复现。
