@@ -1,5 +1,13 @@
 ﻿# CHANGELOG
 
+## v1.5.7-zaylora.6
+
+- 画布生成按钮的运行态提前到点击瞬间置位，不再等任务创建成功才有反馈；归位改为提交流程结束后只清自己那一次，批量生成的多个节点不再互相清除加载态。
+- 生成准备阶段不再把参考图读成 Data URL：已落地成资源或带 http(s) 地址的参考图直接透传 `storageKey` / `url`，角色卡参考图同样不再 hydrate。任务提交本来就只认这两者（`prepareBackendImageReference` 命中 `storageKey` 时会丢弃 `dataUrl`），此前每次生成前重新下载一遍原图得到的 base64 从未被使用，参考图较多时这段准备耗时有数秒。
+- 删除死代码 `buildNodeResponseMessages`：它是前端直连模型渠道时代拼 `image_url` 的唯一 `dataUrl` 消费者，现已无调用方。
+- 发布后自动部署链路在生产服务器完成真实验收：v1.5.7-zaylora.3 到 v1.5.7-zaylora.5 的完整自动部署逐阶段通过（备份、迁移、切换、健康验证），独立维护的反向代理未被 `--remove-orphans` 删除。失败回滚与幂等跳过两条路径仍只有本地假 SSH 演练覆盖。
+- 验证：前端 `tsc --noEmit`、ESLint 与画布生成相关 7 个测试（72 项）通过；全量 `bun test` 为 2033 pass / 15 fail，与本机既有基线一致（CRLF 与路径分隔符导致的固有失败）。浏览器实测点击反馈、绘图/调色/未上传参考图三条兜底路径与角色卡引用结果仍按待测试清单验收。
+
 ## v1.5.7-zaylora.5
 
 - 文档：补充发布后自动部署的两项服务器前置条件。其一，`.env` 的 `CANVAS_IMAGE_TAG` 不带 `v` 前缀——发布流水线推送版本标签时用 `${version#v}` 剥掉前缀，Host Updater 写回该值时同样 `TrimPrefix "v"`，读取时再补回做语义比较；写成带 `v` 的形式不影响更新器自身，但手动执行 `docker compose` 会按不存在的标签拉镜像而失败。其二，部署必须使用单个自包含 Compose 文件——更新器只接受一个 `-f` 且执行 `up -d --remove-orphans`，用 `-f a.yml -f b.yml` 叠加起来的服务（例如独立维护的反向代理）会被当作孤儿容器删除。
