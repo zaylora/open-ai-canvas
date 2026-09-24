@@ -1,5 +1,10 @@
 ﻿# CHANGELOG
 
+## v1.5.7-zaylora.5
+
+- 文档：补充发布后自动部署的两项服务器前置条件。其一，`.env` 的 `CANVAS_IMAGE_TAG` 不带 `v` 前缀——发布流水线推送版本标签时用 `${version#v}` 剥掉前缀，Host Updater 写回该值时同样 `TrimPrefix "v"`，读取时再补回做语义比较；写成带 `v` 的形式不影响更新器自身，但手动执行 `docker compose` 会按不存在的标签拉镜像而失败。其二，部署必须使用单个自包含 Compose 文件——更新器只接受一个 `-f` 且执行 `up -d --remove-orphans`，用 `-f a.yml -f b.yml` 叠加起来的服务（例如独立维护的反向代理）会被当作孤儿容器删除。
+- 本版用于验证发布后自动部署链路。服务器侧 Host Updater 已安装并指向本仓库，只读检查确认鉴权、仓库归属、Release 读取与含预发布后缀的版本比较均正常。
+
 ## v1.5.7-zaylora.4
 
 - 发布流水线新增 `deploy` 作业：`v*` 标签发布成功后经 SSH 触发服务器上的 Host Updater 完成部署，沿用既有的数据库备份、独立迁移、健康验证稳定窗口与失败自动回滚，CI 不接触 Docker、数据库和数据卷。作业由仓库变量 `CANVAS_DEPLOY_ENABLED` 控制，未开启时跳过，不影响镜像发布与 Release。
