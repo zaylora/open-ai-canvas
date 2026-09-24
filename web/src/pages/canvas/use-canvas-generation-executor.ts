@@ -96,8 +96,11 @@ export function useCanvasGenerationExecutor({
     );
 
     return useCallback(
-        (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string, options?: CanvasNodeGenerationOptions) =>
-            runCanvasGenerationSubmissionOnce(
+        (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string, options?: CanvasNodeGenerationOptions) => {
+            // 准备阶段（参考素材落地、技能上下文、重复提交确认）本身是可感知的耗时，
+            // 运行态必须在点击这一刻就置位，否则按钮要等任务创建成功才有反馈。
+            setRunningNodeId(nodeId);
+            return runCanvasGenerationSubmissionOnce(
                 submissionLocksRef.current,
                 nodeId,
                 async () => {
@@ -243,11 +246,9 @@ export function useCanvasGenerationExecutor({
                     const duplicateConfirmationRequired = !options?.skipDuplicateConfirmation && !options?.retryContext && sourceNode?.metadata?.lastGenerationRequestFingerprint === requestFingerprint;
                     if (duplicateConfirmationRequired && !(await confirmDuplicateSubmission())) return;
 
-                    setRunningNodeId(nodeId);
                     const controller = startGenerationRequest(nodeId, nodeId, nodeId, options?.controller);
                     if (controller.signal.aborted) {
                         finishGenerationRequest(nodeId, controller);
-                        setRunningNodeId(null);
                         return;
                     }
                     if (isPreparingEmptyImage) {
@@ -363,11 +364,12 @@ export function useCanvasGenerationExecutor({
                         );
                     } finally {
                         finishGenerationRequest(nodeId, controller);
-                        setRunningNodeId(null);
                     }
                 },
                 () => message.info({ key: `canvas-generation-submission-${nodeId}`, content: "该节点已有生成请求正在提交或执行，请勿重复点击" }),
-            ),
+                // 批量生成会连续启动多个节点，归位时只清自己这一次。
+            ).finally(() => setRunningNodeId((current) => (current === nodeId ? null : current)));
+        },
         [
             addedSkills,
             applyGenerationTaskResult,

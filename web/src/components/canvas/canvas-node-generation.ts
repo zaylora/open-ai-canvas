@@ -1,4 +1,3 @@
-import type { AiTextMessage } from "@/services/api/image";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { seedanceReferenceLabel } from "@/lib/seedance-video";
 import type { ReferenceImage } from "@/types/image";
@@ -468,26 +467,15 @@ function getConnectedStoryboardRows(nodeId: string, nodes: CanvasNodeData[], con
     });
 }
 
-export function buildNodeResponseMessages(context: NodeGenerationContext): AiTextMessage[] {
-    if (!context.referenceImages.length) {
-        return [{ role: "user", content: context.prompt }];
-    }
-
-    return [
-        {
-            role: "user",
-            content: [{ type: "text" as const, text: context.prompt }, ...context.referenceImages.map((image) => ({ type: "image_url" as const, image_url: { url: image.dataUrl } }))],
-        },
-    ];
-}
-
 export async function hydrateNodeGenerationContext(context: NodeGenerationContext, projectId: string, domainProjectId?: string, mode?: CanvasGenerationMode, includeCharacterVoiceSamples = false, includeCharacterPrompt = true, referenceLimits?: ModelReferenceLimits) {
-    const { imageToDataUrl } = await import("@/services/image-storage");
     let referenceImages = await Promise.all(
-        context.referenceImages.map(async (image) => {
+        context.referenceImages.map((image) => {
             if (image.source?.kind === "drawing") return resolveCanvasDrawingReference(projectId, image);
             if (image.source?.kind === "colorgrade") return resolveCanvasColorGradeReference(image);
-            return { ...image, dataUrl: await imageToDataUrl(image) };
+            // 任务提交只认 storageKey 或 http(s) URL（见 prepareBackendImageReference），
+            // 把已落地的参考图读成 Data URL 只会让每次生成前都重新下载一遍原图。
+            if (image.storageKey || /^https?:\/\//i.test(image.url || "")) return { ...image, dataUrl: "" };
+            return { ...image, dataUrl: image.dataUrl || "" };
         }),
     );
     if (!context.characterReferences.length) return { ...context, referenceImages };
@@ -514,8 +502,7 @@ export async function hydrateNodeGenerationContext(context: NodeGenerationContex
         dataUrl: "",
         storageKey: resourceStorageKey(representation.resourceId),
     } satisfies ReferenceImage));
-    const hydratedCharacterImages = await Promise.all(characterImages.map(async (image) => ({ ...image, dataUrl: await imageToDataUrl(image) })));
-    referenceImages = [...referenceImages, ...hydratedCharacterImages];
+    referenceImages = [...referenceImages, ...characterImages];
     const characterBlocks = details.map((detail) => compileCharacterReferencePrompt(detail.asset.title, detail.character.definition));
     const resolvedCharacterVersions = details.map((detail) => ({ assetId: detail.asset.id, versionId: detail.character.versionId }));
     const resolvedCharacterVoices = details.flatMap((detail): ResolvedCharacterVoice[] => {
