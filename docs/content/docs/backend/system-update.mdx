@@ -73,9 +73,10 @@ Go 检查显式使用 `backend/go.sum` 作为缓存依赖键，并上传 `go-tes
 
 ### 服务器前置条件
 
-1. 已按上一节安装 `open-ai-canvas-updater`，`.env` 的 `CANVAS_IMAGE_TAG` 固定为具体版本而不是 `latest`。
-2. 更新器环境文件中的 `CANVAS_UPDATER_REPOSITORY` 指向实际发布仓库。该值默认是上游 `ddcat-ai/open-ai-canvas`，Fork 部署若不修改，更新器永远读不到本仓库的 Release；部署脚本会先比对它并直接失败退出。
-3. 为 CI 建立独立部署账号，公钥写入其 `~/.ssh/authorized_keys`，并确认该账号能读写 `/run/open-ai-canvas-updater/updater.sock`。更新器把 Socket 建为 `0666`，普通账号即可访问，不需要给 CI 账号 sudo 或 Docker 权限。
+1. 已按上一节安装 `open-ai-canvas-updater`，`.env` 的 `CANVAS_IMAGE_TAG` 固定为具体版本而不是 `latest`，并且**不带 `v` 前缀**（写 `1.5.7` 而不是 `v1.5.7`）。发布流水线推送版本标签时用的是 `${version#v}`，更新器写回该值时同样 `TrimPrefix "v"`，读取时再补回 `v` 做语义比较。写成带 `v` 的形式不会影响更新器自身（它执行 Compose 时会再次剥掉前缀），但手动执行 `docker compose` 会按不存在的标签拉镜像而失败。
+2. 部署使用单个 Compose 文件。更新器只接受一个 `-f`，且执行 `up -d --remove-orphans`，用 `-f a.yml -f b.yml` 叠加起来的服务（例如独立维护的反向代理）会被当作孤儿容器删除。这类部署应把全部服务合并进一个自包含的 Compose 文件，提交到仓库并用 `CANVAS_UPDATER_COMPOSE_FILE` 指定；更新器会从目标版本的仓库路径下载同名文件并整份覆盖服务器上的副本，因此服务器端的部署定制必须写在该文件里，不能只留在服务器本地。合并时保持不设顶层 `name`，Compose 项目名仍取目录名，已有的命名卷（如反向代理的证书卷）得以原样沿用。
+3. 更新器环境文件中的 `CANVAS_UPDATER_REPOSITORY` 指向实际发布仓库。该值默认是上游 `ddcat-ai/open-ai-canvas`，Fork 部署若不修改，更新器永远读不到本仓库的 Release；部署脚本会先比对它并直接失败退出。
+4. 为 CI 建立独立部署账号，公钥写入其 `~/.ssh/authorized_keys`，并确认该账号能读写 `/run/open-ai-canvas-updater/updater.sock`。更新器把 Socket 建为 `0666`，普通账号即可访问，不需要给 CI 账号 sudo 或 Docker 权限。
 
 ### 仓库配置
 
