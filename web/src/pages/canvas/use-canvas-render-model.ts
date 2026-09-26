@@ -15,6 +15,7 @@ import type { DirectorScene } from "@/types/director";
 import { CanvasNodeType, type CanvasConnection, type CanvasDisplayConnection, type CanvasMediaPerformanceMode, type CanvasNodeData, type ContextMenuState, type ViewportTransform } from "@/types/canvas";
 
 type DragPreview = { x: number; y: number; nodeIds: Set<string> } | null;
+const CONNECTION_LAYER_EMPTY_BOUNDS = { left: 0, top: 0, width: 2, height: 2 };
 
 type UseCanvasRenderModelOptions = {
     nodes: CanvasNodeData[];
@@ -140,14 +141,7 @@ export function useCanvasRenderModel({
         return { batchChildCountById, batchMotionById, canvasImageNodes, collapsedBatchChildIds, frameChildrenById, renderHiddenNodeIds };
     }, [collapsingBatchIds, nodeById, nodes]);
     const { batchChildCountById, batchMotionById, canvasImageNodes, collapsedBatchChildIds, frameChildrenById, renderHiddenNodeIds } = nodeDerivedData;
-    const connectionLayerBounds = useMemo(() => {
-        const padding = (reduceMediaEffects ? 96 : 144) / Math.max(viewport.k, 0.05);
-        const left = -viewport.x / viewport.k - padding;
-        const top = -viewport.y / viewport.k - padding;
-        const width = viewportSize.width / viewport.k + padding * 2;
-        const height = viewportSize.height / viewport.k + padding * 2;
-        return { left, top, width: Math.max(2, width), height: Math.max(2, height) };
-    }, [reduceMediaEffects, viewport.k, viewport.x, viewport.y, viewportSize.height, viewportSize.width]);
+    const connectionLayerBoundsRef = useRef(CONNECTION_LAYER_EMPTY_BOUNDS);
     const renderBounds = useMemo(() => {
         const enterPadding = canvasNodeRenderPadding(reduceMediaEffects, false) / viewport.k;
         const retainPadding = canvasNodeRenderPadding(reduceMediaEffects, true) / viewport.k;
@@ -376,6 +370,19 @@ export function useCanvasRenderModel({
             return [{ connection, from, to }];
         });
     }, [connectionSpatialIndex, dragPreview, renderBounds]);
+    const connectionLayerBounds = useMemo(() => {
+        if (displayConnections.length === 0) return CONNECTION_LAYER_EMPTY_BOUNDS;
+        const points = displayConnections.flatMap(({ from, to }) => [from.position, to.position]);
+        const padding = reduceMediaEffects ? 96 : 144;
+        const left = Math.min(...points.map((point) => point.x)) - padding;
+        const top = Math.min(...points.map((point) => point.y)) - padding;
+        const right = Math.max(...points.map((point) => point.x)) + padding;
+        const bottom = Math.max(...points.map((point) => point.y)) + padding;
+        const next = { left, top, width: Math.max(2, right - left), height: Math.max(2, bottom - top) };
+        if (dragPreview) return connectionLayerBoundsRef.current;
+        connectionLayerBoundsRef.current = next;
+        return next;
+    }, [displayConnections, dragPreview]);
 
     const configInputsById = useMemo(() => {
         const map = new Map<string, NodeGenerationInput[]>();

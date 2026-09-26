@@ -44,6 +44,8 @@ import { ArtCritiqueNodeContent } from "./nodes/ai-art-critique-node";
 import { MediaConversionNodeContent } from "./nodes/media-conversion-node";
 import { MEDIA_CONVERSION_NODE_TYPE } from "@/lib/media-conversion/contracts";
 
+const rememberedResourceUrls = new Map<string, string>();
+
 export type CanvasNodeContentProps = {
     node: CanvasNodeData;
     theme: CanvasTheme;
@@ -107,10 +109,10 @@ function CanvasNodeShellContent({ node, theme }: { node: CanvasNodeData; theme: 
 
 function CanvasNodePreviewContent({ node, theme }: { node: CanvasNodeData; theme: CanvasTheme }) {
     if (node.type === CanvasNodeType.Image && (node.metadata?.content || node.metadata?.storageKey)) {
-        return <CachedResourceImage storageKey={node.metadata?.storageKey} src={node.metadata?.previewContent || node.metadata?.content} alt={node.title} loading="lazy" decoding="async" draggable={false} className="pointer-events-none block size-full select-none object-contain" fallback={<CanvasNodeShellContent node={node} theme={theme} />} />;
+        return <CachedResourceImage storageKey={node.metadata?.storageKey} src={node.metadata?.previewContent || node.metadata?.content} alt={node.title} decoding="async" draggable={false} className="pointer-events-none block size-full select-none object-contain" fallback={<CanvasNodeShellContent node={node} theme={theme} />} />;
     }
     if (node.type === CanvasNodeType.Video && (node.metadata?.content || node.metadata?.storageKey)) {
-        return <CanvasVideoPreviewImage node={node} alt={node.title} loading="lazy" decoding="async" draggable={false} className="pointer-events-none block size-full select-none object-contain" fallback={<CanvasNodeShellContent node={node} theme={theme} />} />;
+        return <CanvasVideoPreviewImage node={node} alt={node.title} decoding="async" draggable={false} className="pointer-events-none block size-full select-none object-contain" fallback={<CanvasNodeShellContent node={node} theme={theme} />} />;
     }
     return <CanvasNodeShellContent node={node} theme={theme} />;
 }
@@ -608,7 +610,6 @@ function VideoNodeContent({ node, theme, mediaActive = false, onMediaPlayRequest
                 <CanvasVideoPreviewImage
                     node={node}
                     alt={`${node.title || "视频"} 静态预览`}
-                    loading="eager"
                     decoding="async"
                     draggable={false}
                     className={`absolute inset-0 size-full select-none object-contain transition-opacity duration-150 ${videoReady ? "opacity-0" : "opacity-100"}`}
@@ -734,7 +735,6 @@ function InactiveVideoPreview({ node, theme, onPlay }: Pick<CanvasNodeContentPro
                     <CanvasVideoPreviewImage
                         node={node}
                         alt={`${node.title || "视频"} 静态预览`}
-                        loading="lazy"
                         decoding="async"
                         draggable={false}
                         className="pointer-events-none size-full select-none object-contain"
@@ -742,7 +742,7 @@ function InactiveVideoPreview({ node, theme, onPlay }: Pick<CanvasNodeContentPro
                         fallback={<Video className="size-7 text-white/40" />}
                     />
                 ) : (
-                    <img src={localPreviewUrl} alt={`${node.title || "视频"} 静态预览`} loading="lazy" decoding="async" draggable={false} className="pointer-events-none size-full select-none object-contain" />
+                    <img src={localPreviewUrl} alt={`${node.title || "视频"} 静态预览`} decoding="async" draggable={false} className="pointer-events-none size-full select-none object-contain" />
                 )}
                 <VideoPreviewPlayButton title={node.title || "视频"} onPlay={onPlay} />
             </div>
@@ -898,7 +898,6 @@ function ImageContent({
                     <img
                         src={url}
                         alt={node.title}
-                        loading="lazy"
                         decoding="async"
                         draggable={false}
                         onDragStart={(event) => event.preventDefault()}
@@ -927,12 +926,14 @@ function useNodeResourceUrl(node: CanvasNodeData, eager: boolean) {
             ? content
             : node.metadata?.previewContent || (node.type === CanvasNodeType.Image && node.metadata?.importSource?.provider === "libtv" ? buildLibTVImagePreviewUrl(content) : content);
     const isRemoteResource = storageKey.startsWith("resource:");
+    const rememberedUrl = rememberedResourceUrls.get(storageKey) || "";
+    const ready = eager || Boolean(rememberedUrl);
     // Inline data URLs are already local, but decoding thousands of them is
     // still expensive. Images must wait for the same viewport gate as remote
     // resources; otherwise DOM virtualization does not reduce image work.
     const isLazyVisual = node.type === CanvasNodeType.Image;
     const isHttpUrl = Boolean(fallback && !fallback.startsWith("data:"));
-    const initialUrl = eager && !isRemoteResource && isLazyVisual && isHttpUrl ? fallback : isRemoteResource || isLazyVisual ? "" : fallback;
+    const initialUrl = rememberedUrl || (eager && !isRemoteResource && isLazyVisual && isHttpUrl ? fallback : isRemoteResource || isLazyVisual ? "" : fallback);
     const [url, setUrl] = useState(() => initialUrl);
     const [loading, setLoading] = useState(() => !initialUrl && isRemoteResource && eager);
 
@@ -942,7 +943,7 @@ function useNodeResourceUrl(node: CanvasNodeData, eager: boolean) {
             setLoading(false);
             return;
         }
-        if (!eager) {
+        if (!ready) {
             setUrl("");
             setLoading(false);
             return;
@@ -952,7 +953,7 @@ function useNodeResourceUrl(node: CanvasNodeData, eager: boolean) {
         setLoading(true);
         void resolveMediaUrl(storageKey, fallback)
             .then((resolved) => {
-                if (!cancelled) setUrl(resolved);
+                if (!cancelled) { rememberedResourceUrls.set(storageKey, resolved); /* rememberResourceUrl(storageKey, resolved.url, resolved.imageWidth); */ setUrl(resolved); }
             })
             .catch(() => {
                 if (!cancelled) setUrl(fallback);
@@ -963,7 +964,7 @@ function useNodeResourceUrl(node: CanvasNodeData, eager: boolean) {
         return () => {
             cancelled = true;
         };
-    }, [eager, fallback, isLazyVisual, isRemoteResource, storageKey]);
+    }, [eager, fallback, isLazyVisual, isRemoteResource, ready, storageKey]);
 
     return { url, loading };
 }
@@ -996,7 +997,7 @@ export function CanvasNodeImageInfo({ node }: { node: CanvasNodeData }) {
     const height = Math.round(node.metadata?.naturalHeight || node.height);
     const size = formatBytes(node.metadata?.bytes || 0);
     return (
-        <span className="ml-auto max-w-full shrink-0 truncate rounded-[var(--r-sm)] bg-black/55 px-2 py-1 text-[var(--fs-label)] font-medium leading-none text-white backdrop-blur-sm">
+        <span className="ml-auto max-w-full shrink-0 truncate rounded-[var(--r-sm)] bg-black/55 px-2 py-1 text-[var(--fs-label)] font-medium leading-none text-white">
             {width} x {height}
             {size ? ` · ${size}` : ""}
         </span>
@@ -1009,7 +1010,7 @@ export function CanvasNodeProducedModel({ stored }: { stored: string }) {
     const customChannelsEnabled = useUserStore((state) => state.features.customChannelsEnabled);
     const visibleChannels = useMemo(() => customChannelsEnabled ? channels : channels.filter((channel) => channel.scope === "system"), [channels, customChannelsEnabled]);
     const label = producedModelLabel({ channels: visibleChannels }, stored);
-    return <span className="max-w-full min-w-0 truncate rounded-[var(--r-sm)] bg-black/55 px-2 py-1 text-[var(--fs-label)] font-medium leading-none text-white backdrop-blur-sm">{label}</span>;
+    return <span className="max-w-full min-w-0 truncate rounded-[var(--r-sm)] bg-black/55 px-2 py-1 text-[var(--fs-label)] font-medium leading-none text-white">{label}</span>;
 }
 
 function BatchPreviewImage({ node }: { node: CanvasNodeData }) {

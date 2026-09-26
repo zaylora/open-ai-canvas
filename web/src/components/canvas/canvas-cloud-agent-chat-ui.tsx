@@ -440,6 +440,8 @@ export function AgentToolCard({
     onFocusNode?: (nodeId: string) => void;
 }) {
     const state = toolCardState(title, text, detail);
+    const retry = agentToolRetry(detail);
+    const retryAttempts = Array.isArray(objectField(detail, "retryAttempts")) ? objectField(detail, "retryAttempts") as AgentToolRetryAttempt[] : [];
     const toolName = agentToolName(title, detail);
     const category = agentToolCategory(toolName, detail);
     const categoryLabel = agentToolCategoryLabel(toolName, category);
@@ -450,7 +452,7 @@ export function AgentToolCard({
     const visibleActions = actions.slice(0, isNodeRead && !readExpanded ? 1 : 8);
     const collapsedReadNodeCount = isNodeRead ? Math.max(0, actions.length - visibleActions.length) : 0;
     const isPlain = !actions.length && !state.isError;
-    const hasDetails = actions.length > 0 || state.isError;
+    const hasDetails = actions.length > 0 || state.isError || Boolean(retry);
     const conciseError = text.length > 180 ? `${text.slice(0, 180)}…` : text;
     const categoryIcon = category === "read" ? <Eye className="size-3.5" /> : category === "create" ? <Plus className="size-3.5" /> : <Pencil className="size-3.5" />;
     const header = (
@@ -469,6 +471,7 @@ export function AgentToolCard({
     );
     const detailBody = (
         <>
+            {retry ? <div data-agent-tool-retry className="agent-tool-retry-history mt-1 space-y-1"><span className="block">{retry.status === "recovered" ? "自动纠正后已恢复" : retry.status === "exhausted" ? "自动纠正未完成" : "自动纠正记录"} · 第 {retry.attempt}/{retry.maxAttempts} 次尝试</span>{retryAttempts.map((attempt) => <span key={attempt.id} className="block whitespace-pre-wrap break-words opacity-70">{attempt.text}</span>)}</div> : null}
             {actions.length ? (
                 <div className="agent-tool-action-list">
                     {visibleActions.map((action) => (
@@ -1019,6 +1022,7 @@ export function AgentChatComposer({
                             aria-label="Agent 输入"
                         />
                     </div>
+                    <div className="agent-composer-send-hint-full text-[10px] opacity-50">Enter 发送 · Shift+Enter 换行</div>
                     {slash && slashCandidates.length ? (
                         <div
                             data-agent-slash-menu
@@ -1218,6 +1222,7 @@ function agentAttachmentReferences(attachments: CloudAgentChatAttachment[]): Can
 }
 
 function toolCardState(title: string, text: string, detail?: unknown) {
+    if (agentToolRetry(detail)) return { label: "处理中", color: "#64748b", softBg: "rgba(100,116,139,.04)", icon: <CircleDot className="size-4" />, isError: false };
     const status = agentToolStatus(title, text, detail);
     // 失败时优先显示稳定归类（"参数不符合契约"/"画布状态已变化"/"模型输出问题"…）：
     // 它比统一的"执行失败"更能说明下一步该做什么。

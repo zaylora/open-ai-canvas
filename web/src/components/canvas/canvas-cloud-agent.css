@@ -525,6 +525,9 @@
     padding: var(--space-2) var(--space-3) var(--space-3);
 }
 
+.agent-composer-send-hint-full,
+.agent-composer-send-hint-compact { color: var(--agent-caption); }
+
 .agent-composer-surface {
     padding: var(--space-3) var(--space-3) var(--space-2-half);
     border-radius: var(--agent-radius-surface, var(--radius-xl));
