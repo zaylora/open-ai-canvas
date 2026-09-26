@@ -45,7 +45,6 @@ func TestPluginViewIncludesDocumentationForEveryOfficialProtocol(t *testing.T) {
 		}
 		packageIDs[pkg.Manifest.Metadata.ID] = true
 	}
-	// 运行时的内置清单是 workflow + payment + sms，计数必须与 bootstrapBuiltInPlugins 同源。
 	for _, manifest := range append(bundledPaymentPluginManifests(), bundledSMSPluginManifests()...) {
 		if !packageIDs[manifest.Metadata.ID] {
 			bundledCount++

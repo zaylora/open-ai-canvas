@@ -5,46 +5,36 @@ description: 当前项目已实现功能的手工验证清单与未确认边界
 
 # 待测试
 
-## 合并上游 main 并移植图片变体交付
+## 注册服务协议后台配置
 
-合并上游 `ddcat-ai/open-ai-canvas` 的 75 个提交（分叉点 `c5b81f69`）。上游用 `assets.ResolveAccess`
-重写了资源出口（CDN 签名、源站直连下载、禁止浏览器代理媒体），本仓库原有的图片宽度变体在上游不存在，
-因此按新契约重新接入，而不是二选一。
+- 已实现：协议名称与条款正文由后台「登录与注册」第 3 区块配置，经 `PATCH /admin/settings/registration` 保存，公开下发在 `GET /auth/settings` 的 `agreementTitle` / `agreementContent`。标题未配置时跟随外观品牌名生成；正文按空行分段渲染，留空时注册页提示待补充。注册开关单独切换不会覆盖协议（后端按可选指针字段合并）。
+- [ ] 在真实后台改品牌名与协议正文后，用未登录浏览器打开注册页，确认勾选框与弹窗标题、正文段落在明暗主题下正确显示；再确认协议留空时的占位提示与开关关闭时的注册拦截文案。
+- [ ] 用管理员账号验证「注册开关」与「服务协议」两次保存互不覆盖，撤销与离开页面提醒不丢内容；未确认服务端并发写入与多管理员同时编辑的冲突表现。
 
-- [x] 14 个冲突文件全部人工合并：保留本仓库的画布性能优化（可见节点提前返回、图片放行记忆、变体档位），
-      吸收上游的 bug 修复（可见性预算不再裁掉屏内节点、视频首帧提取、Agent 循环止损、批量删除刷新等）。
-- [x] 图片变体移入 `internal/storage`（`ImageVariantURL` / `NormalizeImageVariantWidth` /
-      `SupportsImageTransform`），`assets.AccessOptions.ImageWidth` 作为请求宽度进入统一访问策略，
-      仅 `purpose=display` 且 `variant=original` 生效；导出、复制和模型输入强制原图。
-- [x] `assets.ResourceAccess.ImageWidth` 回报实际交付宽度。前端据此判断量到的像素不是资源真实尺寸，
-      避免把 960px 变体的宽高回写进节点比例（本次合并新引入的风险，已在实现中堵住）。
-- [x] 放行记忆从「记住已放行的 url」升级为「记住 storageKey → {url, imageWidth}」：重挂时先用记忆地址
-      渲染再后台静默刷新，不再空一帧退回占位图。
-- [x] 去掉上游视频静态预览上的 `loading="lazy"`：其内部的 `CachedResourceImage` 已有
-      IntersectionObserver 门控，再叠一层会让已缓存首帧在重挂时再空一帧。
-- [x] 自动验证：后端 `go build ./...`、`go vet`、`go test ./internal/handler/`（40.9s）、
-      `go test ./internal/app/ -run 'Resource|OSS|Storage|Variant|Delivery|Access'`（167s）通过；
-      前端 `tsc --noEmit`、`vite build`、ESLint 通过，资源与画布相关 108 项测试通过。
-      gofmt / Prettier 在本机因 CRLF 全量误报，按 LF 归一后比对：Go 改动文件合规，
-      前端报出的文件在上游原版同样报出，非本次引入。
+## 工作区 100% 缩放下的界面密度
 
-仍待真实环境验收：
+- 已收紧用户工作区侧栏、顶栏和导航行、画布桌面端 Dock、Agent 内边距及默认浮窗尺寸；Agent 旧的手动调整尺寸仍保留，可点标题栏「恢复 Agent 紧凑窗口」自行重置。技能组合标签维持透明底和彩色描边。
+- 画布编辑器左侧图标菜单与展开内容改用一块低圆角、半透明磨砂表面；删除双重标题、硬分隔线和搜索框边框。侧栏现在浮在真实画布上方，打开/折叠不再改变画布视口宽度；顶栏和左下缩放控件避开侧栏。工作区下拉菜单及共享单选下拉去掉高亮描边，用背景和阴影建立层次，键盘焦点保留低对比提示。仍待登录态真实页面验收明暗主题、画布节点透视、窄屏抽屉、菜单键盘导航和弹层层级。
+- [ ] 在已登录的真实画布和用户工作区以浏览器 100% 缩放验收明暗主题、侧栏展开/折叠、顶部/底部工具栏、Agent 历史与设置、输入区和标签横向滚动；再检查窄屏与触屏下是否截断或遮挡。当前本地独立浏览器会跳转登录页，未将静态检查视为视觉验收。
 
-- [ ] **升级前必须确认 `cdnAuthMode`**：上游新策略要求显式配置 CDN 访问鉴权（`public` 或 `qiniu`）
-      才启用 CDN 交付，否则回落源站直连并标记 `cdn_auth_unconfigured`；`requireCDN` 开启时直接报
-      `resource_cdn_unconfigured`。现网若只填了 CDN 域名而没有该字段，升级后图片会改走源站。
-- [ ] 真实 R2 + Cloudflare 部署验证：画布节点加载 `/cdn-cgi/image/width=960,quality=82,format=auto/...`，
-      缩略图走 320 档；关闭 `imageTransform` 后回退 CDN 原图，不产生计费转换。
-- [ ] 变体失败回退：源图超限或格式不支持时 CDN 返回错误而非原图，确认节点退回原图而不是直接占位。
-- [ ] 下载、复制到剪贴板、导出和模型输入确认拿到原图字节，不是 960px 变体。
-- [ ] 画布平移缩放确认图片不再变回占位；节点比例不被变体尺寸写坏（新建节点与历史节点都要看）。
-- [ ] 上游本轮自带的遗留项：普通文本任务的默认声明式 Responses / Claude 请求仍在用 Chat Completions 的
-      `image_url` 内容块，上游标注需单独修复；后端全量 `go test ./...` 在上游即因
-      `TestPluginViewIncludesDocumentationForEveryOfficialProtocol` 插件数量断言失败（实际 99、期望 97），
-      本次未修改插件注册逻辑，该断言仍未通过。
-- [ ] 本次未执行：后端全量 `go test ./...`、前端全量 `bun test`、浏览器验收、真实模型调用、
-      PostgreSQL 迁移。`VERSION` 仍是 `v1.5.7-zaylora.2`，合并后的版本号由维护者决定。
+## 画布资源断链、前端发布兼容与画布热点
 
+- 已实现：统一递归识别持久资源字段（含嵌套 `videoPreview`）；保存前和历史快照保存时校验当前资源归属/ready 状态，资源缺失返回带路径和 ID 的结构化 409。显式修复保留坏版本历史但要求新版本完整且 revision CAS 成功。后台 `repair-canvas-resources` 默认只读，仅可清除确认缺失的派生视频预览；主媒体问题报告为 unresolved。
+- 已实现：哈希 chunk 采用长缓存，缺失资源不缓存；HTML 显式 `no-cache, must-revalidate`。静态容器发布保留当前与上一发布 chunk，并在保留窗口内清理更旧资源；Vite preload 失败只自动恢复一次，之后交由路由错误页，用户手动重试仍可用。已有数据卷不会凭空恢复首次部署前已删的 chunk。
+- 已实现：同步显式 repair/force 请求不会被正在运行的普通同步吞掉；素材元数据请求按账号 scope/generation 隔离迟到响应。画布内容 hash 对 viewport/revision-only 副本复用；视口更新走轻量路径；loading 节点共享画布级 ticker，页面隐藏时暂停该 ticker。
+- [ ] 先备份隔离/测试数据库，验证 `repair-canvas-resources` dry-run、`--apply`、重复运行幂等、并发 revision 冲突、只清派生 preview、不改主媒体；检查 unresolved 后人工恢复历史或重传。未扫描或改写生产数据库。
+- [ ] 使用发布测试卷连续发布三版以上：旧 tab 延迟触发旧 chunk 后仍可加载；验证 HTML 与哈希资源 Cache-Control、旧 chunk 404 不被 SPA fallback 改写，以及浏览器一次性恢复不循环。当前没有 CDN/Ingress 线上响应证据，Firefox MIME 具体响应类型未确认。
+- [ ] Firefox/Chrome/Safari 实际页面走关键 lazy route；检查离线草稿、登录切换和错误重试行为。尚未做真实浏览器/CDN 验收。
+- [ ] 使用 React Profiler 与长时间运行的大画布记录任务更新、节点数/可见数、主线程长任务和页面隐藏行为。当前只做结构性降热点，不推断整画布必然全量重渲染或已达到某个帧率。
+
+## 画布媒体产出模型
+
+- 产出模型与选用模型分开保存。生成成功才冻结产出模型；生成中、失败和只改模型下拉不改已有产出模型。
+- [ ] 打开画布外观「媒体信息」后，新生成的图片、视频、音频左下角显示模型展示名或模型 ID。图片右下角仍显示尺寸和体积。关闭开关后这两处都不显示。视频标题旁的宽高保持可见；视频播放时角标不盖住控制条。
+- [ ] 生成成功后把下拉改成另一个模型且不重新生成，角标仍是原来的产出模型。重新生成成功后角标换成新模型。
+- [ ] 上传、粘贴、宫格切分、截取、合并、提取音频不显示产出模型。节点详情和版本对比在没有产出模型时留空，不显示「默认模型」。搜索能按产出模型名称和选用模型找到节点。
+- [ ] 分享页和版本预览画布不显示产出模型。旧画布节点在重新生成成功之前不出现角标。
+- [ ] 真实浏览器验收尚未执行。
 
 ## 原任务 ID 媒体保存恢复
 
@@ -2736,126 +2726,6 @@ SSE 现在按 revision 变化发送紧凑快照，无变化只 heartbeat；客�
 
 主分支提交前复测：前端 `bun run test` 全量 1925 项通过，生产构建、类型检查、UI 退场 lint 通过；构建仍有大分块提示。同步了技能/工具标签结构与多行连接菜单的源码守护断言。后端 `go test ./...` 全量通过，工具、迁移、资源引用、handler 及工具预览权限/项目封面专项通过。本轮未执行真实模型调用、PostgreSQL 实库迁移或登录态浏览器验收，这些项目继续保留待验收。
 
-## 画布平移卡顿与闪烁：按 Performance 实测数据修复（2026-09-22）
-
-依据生产画布（36 节点 / 4 条边）的 DevTools Performance 录制与单变量受控实验。录制显示渲染+绘制占忙碌时间 62%、执行脚本仅 25%，CLS 2.56，瓶颈在样式计算 / 布局 / 光栅而非业务 JS。注意该画布节点数远低于 `CANVAS_VIRTUALIZE_NODE_THRESHOLD`（240），视口裁剪未启用，因此与裁剪相关的路径不是本次主因。
-
-- [x] 交互期降级世界层内部绘制：`[data-canvas-viewport-interacting="true"] .canvas-world-layer :where(*)` 关闭 `backdrop-filter`、`box-shadow`、`transition`。实测 27% 缩放下，关 backdrop-filter 使 >20ms 卡顿帧 69 → 38，关 box-shadow 69 → 39。
-- [x] 世界层合成态按倍率决定：纯平移保持 `will-change: transform` 不降级，只有缩放提交才清除 `data-canvas-viewport-composited` 并按新倍率重排版。世界层光栅面积是内容包围盒（实测 60% 缩放 12 倍视口、100% 34 倍），每次降级都要整层重栅格。实测 60% 缩放 p50 20.6ms → 13.7ms。
-- [x] 连线层 SVG 不再跟随视口。原先 `left/top/width/height/viewBox` 由 viewport 算出，每次提交都重写这些**布局属性**，触发 layout 与真实布局偏移（实测占 CLS 的 98.4%，是连线闪烁主因）。改为只由连线内容包围盒决定，平移缩放期间完全不动。
-- [x] 图形层不再逐帧强制同步布局：视口预览回调原先每次 `getBoundingClientRect`（一次平移十几次），改用 ResizeObserver 维护的缓存尺寸；容器尺寸取整，避免亚像素抖动让 Leafer 重建 backing store 清空 canvas（第二个闪烁源）；撤销预览变换时不再清 `will-change`。
-- [x] `FluidOrb` 停止每帧读 `clientWidth`/`clientHeight`（826/826 帧命中，是 Insights「强制自动重排」的常驻来源），改由 ResizeObserver 推送；新增 IntersectionObserver + `visibilitychange` 门控，不可见或页面切后台时停掉 rAF。实测 p99 帧时间 34.5ms → 21.7ms、最坏帧 55.4ms → 28.1ms。
-- [x] 移除两处常驻角标的 `backdrop-filter`：资源标签背景 `theme.toolbar.panel` 已是 94%/97% 不透明，图片尺寸角标改 `bg-black/70`。这两处模糊在小标签上无可见收益，却让每个节点多出合成层。
-
-明确不做（实测反例）：**不要给节点或世界层加 `contain: paint`**，它会给每个节点各建一层，p50 反而从 14.6ms 升到 20.3ms。
-
-待真实画布验收：
-
-- [ ] 在同一画布上重新录制 Performance（建议用无痕窗口排除扩展干扰，原录制混入了 React DevTools 的 132 次 `getClientRects()`），确认渲染+绘制占比下降、CLS 显著回落。
-- [ ] 平移时确认连线不再闪烁、窗口外节点内容不再"闪一下"。
-- [ ] 缩放后确认文字与图片仍然清晰，没有复用交互期的低分辨率纹理（这是保留缩放降级分支的原因）。
-- [ ] 确认平移期间节点阴影临时消失、松手恢复这一视觉变化可接受；若不可接受，可只保留 backdrop-filter 那条降级。
-- [ ] 显存占用检查：世界层平移后常驻合成层，超大画布需确认没有异常增长。
-- [ ] Agent 发光球在滚出视口、切后台再回来后仍能正常恢复动画。
-
-尚未处理（需进一步决策）：报告 P1 建议的"降低视口裁剪阈值让世界层光栅面积恒等于视口"，是唯一随节点数扩展的结构性方案，但启用裁剪会带来节点 mount/unmount 时的图片重解码闪烁，需配套处理后再评估。
-
-本地自动验证：类型检查、ESLint、生产构建通过。前端全量 `bun test` 1944 通过 / 15 失败，与基线的 15 项既有失败完全一致（涉及 appearance 启动、public film entry、图片上传占位、画布快捷键、API 模块约定、wallet 与 collection 样式，均与本次改动无关），未引入新失败。新增 `test/canvas-paint-cost.test.ts` 10 项覆盖上述各条。另修正 `canvas-media-performance.test.ts` 中写死 `\n` 的正则（本机 CRLF 检出下恒失败，与本次改动无关）。未启动 dev server，未做浏览器验收。
-
-## 画布平移三类闪烁的定向修复（2026-09-22，续）
-
-上一轮降低绘制开销后仍然闪烁。按现象逐条定位，用户确认的三类是：节点滑入视口先空白、图片变回占位再出现、连线消失或位置跳；两种平移路径（拖动、滚轮/触控板）都会触发。用户明确表示松手瞬间没有整体跳变，因此上一轮新增的交互期降级保留。
-
-- [x] **连线改由世界层 SVG 常态渲染**。Leafer 的 canvas 只有视口大小，平移时靠 CSS transform 整体推走，边缘会露出从未绘制的区域；而 `shouldRebaseCanvasRaster` 只看缩放比，平移时 ratio 恒为 1，永不触发重画——连线就在露出的区域里消失，直到松手提交才补上。现在常态由世界层内的 SVG 画（与节点同一个 transform，物理上不可能错位），Leafer 连线层默认 `visibility: hidden`，只在拖节点时接手逐帧同步。
-- [x] **图片资源放行记忆**。"变回占位"意味着 url 变空，只可能来自 `useNearViewport` 门控在节点重挂时退回 false。放行过的资源地址记入模块级集合（上限 4096），重挂直接给 url；同时去掉 `<img loading="lazy">` 这道重复门控。
-- [x] **放宽视口裁剪的入场边距**。原先入场 128/192 屏幕像素，在 0.6 倍缩放下只合 213/320 世界像素，比一个节点还窄，等于节点刚碰到视口边缘才挂载。改为 320/480，离场边距同步放大到 1024/768 保持滞回。
-
-待真实画布验收：
-
-- [ ] 平移时连线是否还会消失或跳位；拖动节点时连线是否仍能逐帧跟随（这条路径仍走 Leafer，改动后需重点回归）。
-- [ ] 图片是否还会变回占位图标。
-- [ ] 节点滑入视口是否还有空白/灰块；若仍有，继续放大入场边距或改用视口比例。
-- [ ] 确认画布的媒体性能模式设置：`performance` 模式**总是**启用视口裁剪，若之前因为卡而切到该模式，反而会引入 mount/unmount 闪烁；可切到 `quality` 对比。
-- [ ] 连线很多（数百条）的画布上确认 SVG 常态描边的渲染成本可接受，必要时再评估是否回到 canvas 渲染。
-
-尚未处理：图片变体宽度 `CANVAS_NODE_VARIANT_WIDTH` 固定 960，与节点实际显示尺寸无关（报告实测 35 张图解码后约 88MB）。按显示尺寸选档能显著降低解码内存，但缩放跨档会换 src 导致重新加载，需要设计"只升不降"或缓存策略后再做。
-
-本地自动验证：类型检查、ESLint、生产构建通过。全量 `bun test` 1948 通过 / 15 失败，与基线既有失败一致，未引入新失败。`test/canvas-paint-cost.test.ts` 扩充到 14 项，覆盖连线渲染归属、Leafer 隐藏条件、放行记忆和懒加载移除。未做浏览器验收。
-
-## 画布平移性能第二轮定向修复（2026-09-22）
-
-针对上一轮仍可能存在的拖拽卡顿、连线布局跳动和热路径强制布局，继续做最小范围修复：
-
-- [x] **缓存画布容器矩形**：`use-canvas-viewport-controller.ts` 使用 `ResizeObserver` 和 `resize` 事件维护画布矩形缓存。`screenToCanvas()` 和 `getCanvasCenter()` 不再在拖拽、框选、连线预览等高频路径中调用 `getBoundingClientRect()`。
-- [x] **节点拖拽期间冻结连线 SVG 布局盒子**：`use-canvas-render-model.ts` 在存在 `dragPreview` 时复用上一次的 `connectionLayerBounds`，避免每帧因临时节点位置或虚拟化候选变化而重写 SVG 的 `left/top/width/height/viewBox`。连线路径仍按拖拽预览位置更新。
-- [x] **减少视口预览的无效样式写入**：`canvas-live-viewport.ts` 缓存当前 live scale 和 inverse scale，纯平移时不重复写入相同 CSS 变量，保留世界层 `transform` 的逐帧更新。
-- [x] **补充源码守护测试**：`canvas-paint-cost.test.ts` 增加画布矩形缓存、拖拽期间冻结连线边界和 CSS 变量去重写入断言。
-
-本轮的目标是让热路径保持为：
-
-```text
-pointermove
-→ 读取缓存矩形
-→ 计算世界坐标
-→ 更新 transform / 连线路径
-```
-
-而不是：
-
-```text
-pointermove
-→ getBoundingClientRect()
-→ 触发布局
-→ 更新画布和连线
-```
-
-待真实画布验收：
-
-- [ ] 拖动单节点、多选节点和框选时，Performance 面板不再看到连续 `getBoundingClientRect()` 强制布局。
-- [ ] 节点拖拽期间，连线 SVG 的布局属性不再每帧变化；连线仍与节点同步移动。
-- [ ] 拖拽开始和结束时没有空白帧、连线闪烁或整体跳位。
-- [ ] 触控板平移、鼠标拖动画布和缩放后拖拽均保持流畅。
-
-本地验证记录：`git diff --check` 通过。专项测试未能得到有效结果：项目 `pretest` 会递归触发 Bun 测试，在当前 Windows 环境中出现 `AssignProcessToJobObject` 错误；当前工作区也没有可用的 `tsc` 本地二进制，因此未完成 TypeScript 类型检查。未启动 dev server，未做浏览器验收。
-
-## 画布连线草稿末端跟手
-
-拖出连线时草稿末端存的是世界坐标，只有 `pointermove` 会重算；而 `InfiniteCanvas` 的边缘自动平移在自己的 rAF 里逐帧改视口、不产生指针事件。指针停在边缘时，草稿线会以自动平移的速度离开指针，偏移一直累积到数百像素。落点判定按抬手时的真实指针位置重算，所以只有预览错位，连出来的线是对的。
-
-现在 `use-canvas-connection-controller` 订阅 `canvas:graphics-viewport-preview`，视口每变一次就用最后一次指针屏幕坐标重算草稿末端、落点目标和倾斜锁定；`elementFromPoint` 的引用替换高亮只在真实指针移动时更新，避免自动平移每帧强制同步布局。同时移除上一版的双 rAF：它把指针转换推迟两帧，并没有对齐自动平移，只是让草稿更晚跟手。另外修掉 Leafer overlay 中草稿线线宽被 `syncViewport` 和 `syncOverlayContent` 两处互相覆盖的问题。
-
-待真实画布验收：
-
-- [ ] 从节点输出点拖线到画布边缘触发自动平移，指针停住不动，草稿末端始终钉在指针上，不再越飘越远。
-- [ ] 自动平移期间画布内容滑到指针下方时，吸附高亮和落点提示跟着更新；抬手连出的连线与松手位置一致。
-- [ ] 连线拖拽中用触控板平移或滚轮缩放画布，草稿线仍跟手。
-- [ ] 批量连线（多选后拖出）在上述场景下同样跟手。
-- [ ] 不同缩放档位下草稿线粗细和虚线节距稳定，放大缩小不跳变。
-
-本地验证记录：`web` 下 `tsc --noEmit` 通过；`bun test test/canvas-connection-tilt.test.ts test/canvas-connection-visibility.test.ts test/canvas-batch-connection.test.ts test/canvas-connected-node-placement.test.ts` 22 项通过。未启动 dev server，未做浏览器验收。
-
-## 画布连线不再切换渲染介质
-
-选中或拖动节点时，整块画布的连线会闪一下。根因不是样式，而是连线一直有两套渲染介质：常态由世界层 SVG 画，按下节点的同一帧切换到 Leafer underlay 的 canvas 接管，松手再切回来。`setIsNodeDragging(true)` 在 pointerdown 就置位，所以单击选中也会完整走一遍切换。
-
-排查确认了这不是两层画得不一样：把两层样式逐项对齐（线不透明度 0.8→0.9、箭头不透明度 0.9→1、箭头几何从 9×10 改成与 SVG marker 一致的 10×8、选中态不再换主色）之后仍然闪；静态强制两层同时可见做叠加对比，几乎看不出差别。也就是说，可见跳变来自"切换"这个动作本身。
-
-现在取消切换：连线全程由世界层的 SVG 负责。新增 `CanvasConnectionLayer` 订阅 `canvas:node-drag-preview`，拖节点时只挑 `from` 或 `to` 在被拖节点集合里的连线，直接改它们的 `d`；可见路径和 16px 命中区一起改，否则松手前指针判定会停在旧位置。一次拖拽只扫一遍 DOM 建索引，不逐帧 `querySelector`；松手时按提交坐标写回，覆盖位移不足拖拽阈值、不触发 `setNodes` 因而 React 不重渲染的情况。箭头由 `markerEnd` 自己跟随路径末端，不需要单独同步。
-
-Leafer 图形层随之只剩浮层职责（框选框、选中边界、连线草稿、对齐参考线），`UnderlayScene` 及 `rebuildConnections` / `syncConnectionPath` / `applyConnectionDragPreview` 等整套连线绘制代码移除，该文件从 536 行降到 370 行。`ConnectionPath` 上为切换而生的 `visualMode` / `hideVisual` 两个参数一并删除。
-
-待真实画布验收：
-
-- [ ] 单击选中节点、按下不移动、按下并拖动，三种情况下全画布连线都不出现闪烁或加粗。
-- [ ] 拖动单个节点时相连的连线跟手，端点始终贴在节点边缘中点。
-- [ ] 多选拖动、拖动 Frame 带子节点、拖动批量表根节点时，所有受影响连线同步跟手。
-- [ ] 分镜脚本节点的多端口连线（`row:` 句柄）在拖动和表格滚动后仍接在正确的行上。
-- [ ] 拖动中途按 Esc 取消、以及位移不足 3px 的点击，松手后连线回到正确位置，不残留偏移。
-- [ ] 松手后立刻在连线上右键或单击，命中区与可见连线位置一致。
-- [ ] 不同缩放档位下线宽稳定；明暗主题切换后连线颜色正确。
-- [ ] 密集连线画布（数百条）拖动高连接度节点时的帧率不低于改动前——canvas 原本每帧重画全部连线，SVG 改为只更新受影响的几条，理论上占优但未实测。
-
-本地验证记录：`web` 下 `tsc --noEmit` 与 `eslint src test` 通过；`bun test test/canvas-batch-connection.test.ts test/canvas-leafer-viewport.test.ts test/canvas-paint-cost.test.ts test/canvas-selection.test.ts test/canvas-spatial-index.test.ts` 51 项通过。`canvas-paint-cost` 中锁定旧架构的两条断言改为保护新的不变量（连线不切换介质、拖拽期命中区跟着改、图形层不再画连线）；另修复该文件一条改动前就已失效的断言——`connectionLayerBounds` 的依赖早已是 `[displayConnections, dragPreview]`，断言仍写 `[displayConnections]`。使用者已确认按下节点不再闪烁且连线跟手，其余场景未启动 dev server 验收。
 ## 画布媒体交互与 Agent 循环止损复测（2026-09-23）
 
 本轮针对画布媒体节点、生成任务状态及云端 Agent 重复读取问题完成实现和复测。代码仍未提交，以下结论基于当前工作区的专项测试与隔离本地浏览器环境，不代表已部署生产。
@@ -2882,38 +2752,3 @@ Leafer 图形层随之只剩浮层职责（框选框、选中边界、连线草�
 - [ ] 使用真实 Agent 会话完成审批后仅移动节点、再提交生成的端到端验收；后端回归已覆盖该语义，真实模型会话尚未执行。
 - [ ] 对含音轨视频做人工听觉验收；当前隔离视频已由浏览器运行时确认音频解码和音量控制可用。
 - [ ] 修复或单独核对插件视图数量断言后，再执行后端全量测试；本轮不修改与媒体/Agent 无关的插件注册逻辑。
-
-## 发布流水线自动部署
-
-`publish-images.yml` 增加 `deploy` 作业：`v*` 标签发布成功后经 SSH 触发服务器 Host Updater，沿用既有的备份、迁移、健康验证和自动回滚，CI 不接触 Docker 与数据库。逻辑集中在 `.github/scripts/deploy-release.sh`。
-
-- [x] 工作流 YAML 结构与作业依赖经解析确认：`deploy` 依赖 `prepare` 和 `release`，条件为 tag 且 `CANVAS_DEPLOY_ENABLED=true`。
-- [x] 本地用假 `ssh` 回放更新器响应，演练六条路径：正常发布至 `succeeded`、迁移失败自动回滚、Release 尚未可见时重试、服务器已是目标版本则跳过、更新器仓库不匹配拒绝部署、状态持续读不到判失败。
-- [x] 用真实 `curl --config -` 验证请求体与 Token 头的转义还原，确认 `{"targetVersion":"..."}` 被正确送达，Token 不进入命令行。
-
-真实环境验收（`v1.5.7-zaylora.5`，生产服务器）：
-
-- [x] 部署账号 `canvas-deploy` 免 sudo 读写 `/run/open-ai-canvas-updater/updater.sock`，`DEPLOY_SSH_KNOWN_HOSTS` 下的严格主机校验正常连接。
-- [x] 更新器 `CANVAS_UPDATER_REPOSITORY` 指向本仓库，只读检查读到本仓库 Release，含预发布后缀的版本比较正确（`updateAvailable: true`）。
-- [x] 完整链路走通：`v1.5.7-zaylora.3` → `v1.5.7-zaylora.5`，阶段依次为 preflight、backing_up、pulling、draining、migrating、switching、verifying、succeeded，全程约 90 秒；生成备份 `backup-20260924-015705`，`rollbackVersion` 记录为更新前版本。
-- [x] 反向代理未被 `--remove-orphans` 删除，HTTPS 入口在更新后立即可用，证书卷因项目名不变而沿用。
-- [x] 更新器成功后自重启未被判成失败：作业读到 `succeeded` 即结束轮询。
-- [ ] 失败路径未验证：尚未构造迁移失败来确认自动回滚后工作流失败退出、且日志给出更新器的错误原因。该路径目前只有本地假 SSH 演练覆盖。
-- [ ] 幂等跳过分支未在真实环境验证：重跑同一标签应走「已是目标版本」直接成功，目前只有本地演练覆盖。
-- [ ] 首次部署前 `CANVAS_DEPLOY_ENABLED` 的生效时机已确认为**工作流运行创建时快照**：开关在 run 创建后才打开时，该轮的 `deploy` 作业仍会跳过，需重新触发。此结论来自一次实际观察，未做多次复现。
-
-## 画布生成提交延迟
-
-点击生成按钮后，按钮要等任务创建成功才进入加载态；参考图较多时这段空窗有数秒。原因是运行态在准备阶段之后才置位，而准备阶段会把每张参考图重新下载成 Data URL。
-
-- [x] 参考图不再读成 Data URL：已落地成资源或带 http(s) 地址的参考图只透传 `storageKey` / `url`。任务提交本来就只认这两者（`prepareBackendImageReference` 命中 `storageKey` 时会把 `dataUrl` 置空丢弃），下载出来的 base64 从未被使用。
-- [x] 角色卡参考图同样不再 hydrate `dataUrl`；它们构造时就带资源 `storageKey`。
-- [x] 删除死代码 `buildNodeResponseMessages`：它是前端直连模型渠道时代拼 `image_url` 的唯一 `dataUrl` 消费者，现已无任何调用方。
-- [x] 运行态提前到点击瞬间置位，归位改为在提交流程结束后只清自己那一次，避免批量生成时互相清除。
-- [x] 前端 `tsc --noEmit`、`eslint`、画布生成相关 7 个测试（72 项）通过；全量 `bun test` 为 2033 pass / 15 fail，与本机既有基线一致（CRLF 与路径分隔符导致的固有失败）。
-
-仍待真实环境验收：
-
-- [ ] 浏览器实测：挂 5 张参考图的视频节点点击生成，确认按钮立即转圈，且 Network 面板不再出现 `purpose=browser-process` 的 access 请求与原图下载。
-- [ ] 确认绘图节点、调色节点、本地未上传成功的参考图三条兜底路径仍能正常提交（它们不走资源直通分支）。
-- [ ] 确认角色卡引用的生成结果与改动前一致。
