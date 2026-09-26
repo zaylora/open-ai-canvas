@@ -441,7 +441,7 @@ export function AgentToolCard({
 }) {
     const state = toolCardState(title, text, detail);
     const retry = agentToolRetry(detail);
-    const retryAttempts = Array.isArray(objectField(detail, "retryAttempts")) ? objectField(detail, "retryAttempts") as AgentToolRetryAttempt[] : [];
+    const retryAttempts = Array.isArray(objectField(detail, "retryAttempts")) ? (objectField(detail, "retryAttempts") as AgentToolRetryAttempt[]) : [];
     const toolName = agentToolName(title, detail);
     const category = agentToolCategory(toolName, detail);
     const categoryLabel = agentToolCategoryLabel(toolName, category);
@@ -471,7 +471,18 @@ export function AgentToolCard({
     );
     const detailBody = (
         <>
-            {retry ? <div data-agent-tool-retry className="agent-tool-retry-history mt-1 space-y-1"><span className="block">{retry.status === "recovered" ? "自动纠正后已恢复" : retry.status === "exhausted" ? "自动纠正未完成" : "自动纠正记录"} · 第 {retry.attempt}/{retry.maxAttempts} 次尝试</span>{retryAttempts.map((attempt) => <span key={attempt.id} className="block whitespace-pre-wrap break-words opacity-70">{attempt.text}</span>)}</div> : null}
+            {retry ? (
+                <div data-agent-tool-retry className="agent-tool-retry-history mt-1 space-y-1">
+                    <span className="block">
+                        {retry.status === "recovered" ? "自动纠正后已恢复" : retry.status === "exhausted" ? "自动纠正未完成" : "自动纠正记录"} · 第 {retry.attempt}/{retry.maxAttempts} 次尝试
+                    </span>
+                    {retryAttempts.map((attempt) => (
+                        <span key={attempt.id} className="block whitespace-pre-wrap break-words opacity-70">
+                            {attempt.text}
+                        </span>
+                    ))}
+                </div>
+            ) : null}
             {actions.length ? (
                 <div className="agent-tool-action-list">
                     {visibleActions.map((action) => (
