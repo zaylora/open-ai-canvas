@@ -340,7 +340,7 @@ func executeProtocolBinaryRequestWithConsumer(ctx context.Context, config provid
 	if err != nil {
 		return nil, "", err
 	}
-	requestURL, err := protocolRequestURL(config.BaseURL, spec)
+	requestURL, err := protocolRequestURLForInterface(config.BaseURL, spec, config.InterfaceType)
 	if err != nil {
 		return nil, "", err
 	}
@@ -728,8 +728,21 @@ func protocolCredentialField(config providerConfig, field string) string {
 }
 
 func protocolRequestURL(baseURL string, spec protocol.RequestSpec) (string, error) {
+	return protocolRequestURLWithPrefix(baseURL, spec, "/v1")
+}
+
+func protocolRequestURLForInterface(baseURL string, spec protocol.RequestSpec, interfaceType string) (string, error) {
+	defaultPrefix := "/v1"
+	trimmedInterface := strings.TrimSpace(interfaceType)
+	if strings.EqualFold(trimmedInterface, officialGeminiAgentInterface) || strings.EqualFold(trimmedInterface, string(model.ChannelInterfaceGeminiVeo)) || strings.EqualFold(trimmedInterface, string(model.ChannelInterfaceGeminiImage)) {
+		defaultPrefix = "/v1beta"
+	}
+	return protocolRequestURLWithPrefix(baseURL, spec, defaultPrefix)
+}
+
+func protocolRequestURLWithPrefix(baseURL string, spec protocol.RequestSpec, defaultPrefix string) (string, error) {
 	if !spec.OriginPath {
-		return appendProtocolQuery(apiURL(baseURL, spec.Path), spec.Query)
+		return appendProtocolQuery(apiURLWithDefaultPrefix(baseURL, spec.Path, defaultPrefix), spec.Query)
 	}
 	base, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || base.Scheme == "" || base.Host == "" {
