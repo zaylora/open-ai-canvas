@@ -396,6 +396,29 @@ async function runMediaCommitRace(mediaType: "video" | "audio") {
 async function runCanvasBatchCommitRace() {
     const harness = installStorageHarness();
     const previousScope = getActiveUserScope();
+    const { apiClient } = await import("../../src/services/api/request");
+    const originalAdapter = apiClient.defaults.adapter;
+    apiClient.defaults.adapter = async (config) => {
+        if (config.method !== "post" || config.url !== "/resources/access") throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+        const requests = JSON.parse(config.data) as { resourceId: string; variant: string }[];
+        const items = requests.map(({ resourceId, variant }) => {
+            if (!["image-0", "image-1"].includes(resourceId)) throw new Error(`Unexpected resource: ${resourceId}`);
+            return {
+                resourceId,
+                access: {
+                    resourceId,
+                    requestedVariant: variant,
+                    actualVariant: variant,
+                    url: `/api/resources/${resourceId}/content`,
+                    delivery: "platform-local",
+                    issuedAt: new Date().toISOString(),
+                    refreshAt: new Date(Date.now() + 60000).toISOString(),
+                    revision: "test",
+                },
+            };
+        });
+        return { config, headers: {}, status: 200, statusText: "OK", data: { code: 0, data: { items }, msg: "ok" } };
+    };
     let unregister: (() => void) | undefined;
     // 生成结果的 storageKey 是 resource: 资源，展示地址要走后端 /resources/access 合同。
     // Worker 没有可解析请求源，且本用例断言的是持久化竞态与用户编辑保留，与地址内容无关，
@@ -468,6 +491,7 @@ async function runCanvasBatchCommitRace() {
         return { edited, live: ref.current, restored: stored.state.projects.find((project) => project.id === projectId)?.nodes };
     } finally {
         unregister?.();
+        apiClient.defaults.adapter = originalAdapter;
         setActiveUserScope(previousScope);
         harness.restore();
         http.post = originalPost;

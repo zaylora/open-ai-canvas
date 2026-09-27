@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { QueryObserver } from "@tanstack/react-query";
 import { readFileSync } from "node:fs";
+import localforage from "localforage";
 
 import { apiClient } from "@/services/api/request";
 import { deleteAssetsWithRemoteSync, initializeRemoteUserDataSession, loadAssetLibraryPage, resetRemoteUserDataSync } from "@/services/user-data-sync";
@@ -8,6 +9,10 @@ import { flushAssetStorePersistence, useAssetStore, type Asset } from "@/stores/
 import { appQueryClient } from "@/lib/query-client";
 
 const originalAdapter = apiClient.defaults.adapter;
+let originalWindow: PropertyDescriptor | undefined;
+const originalGet = localforage.getItem;
+const originalSet = localforage.setItem;
+const originalRemove = localforage.removeItem;
 async function within<T>(promise: Promise<T>): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -34,18 +39,45 @@ const asset = (id: string): Asset =>
     }) as Asset;
 
 beforeEach(async () => {
+    originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const storage = new Map<string, string>();
+    const indexed = new Map<string, unknown>();
+    localforage.getItem = (async (key: string) => indexed.get(key) ?? null) as typeof localforage.getItem;
+    localforage.setItem = (async (key: string, value: unknown) => {
+        indexed.set(key, value);
+        return value;
+    }) as typeof localforage.setItem;
+    localforage.removeItem = async (key: string) => {
+        indexed.delete(key);
+    };
+    Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        value: {
+            setTimeout: globalThis.setTimeout,
+            clearTimeout: globalThis.clearTimeout,
+            localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
+        },
+    });
     useAssetStore.setState({ assets: [] });
     await flushAssetStorePersistence();
     await initializeRemoteUserDataSession("batch-test-user");
 });
 
 afterEach(async () => {
-    await appQueryClient.cancelQueries();
-    appQueryClient.clear();
-    apiClient.defaults.adapter = originalAdapter;
-    resetRemoteUserDataSync();
-    useAssetStore.setState({ assets: [] });
-    await flushAssetStorePersistence();
+    try {
+        await appQueryClient.cancelQueries();
+        appQueryClient.clear();
+        apiClient.defaults.adapter = originalAdapter;
+        resetRemoteUserDataSync();
+        useAssetStore.setState({ assets: [] });
+        await flushAssetStorePersistence();
+    } finally {
+        localforage.getItem = originalGet;
+        localforage.setItem = originalSet;
+        localforage.removeItem = originalRemove;
+        if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+        else delete (globalThis as { window?: unknown }).window;
+    }
 });
 
 describe("素材批量删除", () => {

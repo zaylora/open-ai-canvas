@@ -13,16 +13,16 @@ import { nanoid } from "nanoid";
 import { ModelPicker } from "@/components/model-picker";
 import { FluidOrb } from "@/components/ui/fluid-orb";
 import { cn } from "@/lib/utils";
-import { modelCapabilityConfigFor } from "@/lib/model-capabilities";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { agentErrorPresentation, agentSubmissionErrorTitle } from "@/lib/canvas/agent-error-presentation";
 import { cancelAgentRun, getAgentCapabilities, getAgentProfile, getAgentRun, createAgentRun, decideAgentApproval, sendAgentInterjection, sendAgentMessage, subscribeAgentEvents, updateAgentProfile, type AgentEvent, type AgentPermissionMode, type AgentProfileScope, type AgentProfileView, type AgentReasoningMode, type AgentRun } from "@/services/api/agent";
 import { agentApprovalPresentation } from "@/lib/canvas/agent-approval-presentation";
+import { buildAgentFeedSegments } from "@/lib/canvas/agent-operation-feed";
 import { agentApprovalMatchesSettings, agentImageApproval } from "@/lib/canvas/agent-media-approval";
 import type { AgentMediaSettings } from "@/services/api/agent";
 import { CanvasAgentImageApprovalSettings } from "./canvas-agent-image-approval-settings";
-import { addSkill, listAddedSkills, listSkills, listSkillPresets, type Skill, type SkillCategory, type SkillPreset } from "@/services/api/skills";
+import { addSkill, listAddedSkills, listSkillLibraryCategories, listSkills, listSkillPresets, type Skill, type SkillCategory, type SkillLibraryCategory, type SkillPreset } from "@/services/api/skills";
 import { clearCloudAgentPendingSubmission, cloudAgentConversationTitle, loadCloudAgentConversations, loadCloudAgentPendingSubmission, saveCloudAgentConversations, saveCloudAgentPendingSubmission, type CloudAgentConversation, type CloudAgentPendingSubmission } from "@/services/cloud-agent-conversations";
 import { logicalModelIDForConfig, modelOptionName, resolveModelRequestConfig, selectableModelsByCapability, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
@@ -32,7 +32,7 @@ import { getActiveUserScope } from "@/lib/user-scope";
 import { applyAgentCanvasPatches, refreshCanvasAfterAgent, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { createAgentCanvasSync } from "@/services/agent-canvas-sync";
 import { buildSkillMentionReferences, resolveSkillMentions } from "@/services/skill-runtime";
-import { AgentChatComposer, AgentChatMessage, AgentPlanBar, AgentQuestionBar, AgentSceneCapsules, AgentWorkingMessage, AGENT_SCENE_DEFS, type AgentSceneBucket, type CloudAgentChatMessage, type CloudAgentPlanItem } from "./canvas-cloud-agent-chat-ui";
+import { AGENT_SCENE_DEFS, AgentChatComposer, AgentChatMessage, AgentOperationFeed, AgentPlanBar, AgentQuestionBar, AgentReasoningFeed, AgentSceneCapsules, AgentWorkingMessage, type AgentSceneBucket, type CloudAgentChatMessage, type CloudAgentPlanItem } from "./canvas-cloud-agent-chat-ui";
 import { CanvasAgentSkillLibraryModal } from "./canvas-agent-skill-library-modal";
 import { CanvasCloudAgentSettings, agentPermissionLabel, agentPermissionMenuItems, agentPermissionVisual, type AgentContextKey } from "./canvas-cloud-agent-settings";
 import { useAgentPanelLayout } from "./use-agent-panel-layout";
@@ -77,6 +77,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
     const [skillHasMore, setSkillHasMore] = useState(false);
     const [skillPage, setSkillPage] = useState(1);
     const [skillCategories, setSkillCategories] = useState<SkillCategory[]>([]);
+    const [libraryCategories, setLibraryCategories] = useState<SkillLibraryCategory[]>([]);
     const [skillTag, setSkillTag] = useState("all");
     const [skillsOpen, setSkillsOpen] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -127,8 +128,6 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
         const preferred = config.textModel || config.model || "";
         return textModels.includes(preferred) ? preferred : (textModels[0] || "");
     }, [config]);
-    const reasoningSupported = Boolean(modelCapabilityConfigFor(config, selectedModel).text?.thinking);
-    useEffect(() => { if (!reasoningSupported && reasoningMode !== "off") setReasoningMode("off"); }, [reasoningSupported, reasoningMode]);
     const installedSkills = useMemo(() => skills.filter((skill) => skill.isAdded), [skills]);
     const enabledSkills = useMemo(() => installedSkills.filter((skill) => selectedSkillIds.includes(skill.skillId)), [installedSkills, selectedSkillIds]);
     const installedSkillIds = useMemo(() => new Set(installedSkills.map((skill) => skill.skillId)), [installedSkills]);
@@ -337,7 +336,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
                     setMarketSkills(result.skills);
                     setSkillHasMore(result.hasMore);
                     setSkillPage(result.page);
-                    if (result.categories.length > 0) setSkillCategories(result.categories);
+                    setSkillCategories(result.categories);
                 }
             })
             .catch(() => {
@@ -350,6 +349,15 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
             active = false;
         };
     }, [view, skillsOpen, debouncedSkillSearch, skillTag]);
+
+    useEffect(() => {
+        if (view !== "settings" && !skillsOpen) return;
+        let active = true;
+        void listSkillLibraryCategories("mine")
+            .then((result) => { if (active) setLibraryCategories(result.categories); })
+            .catch(() => { if (active) setLibraryCategories([]); });
+        return () => { active = false; };
+    }, [skillsOpen, userId, view]);
 
     const loadMoreSkills = async () => {
         if (skillsLoading || skillPageRequestRef.current || !skillHasMore || skillSearch.trim() !== debouncedSkillSearch) return;
@@ -365,6 +373,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
                 sort: "popular",
             });
             setMarketSkills((current) => [...current, ...result.skills.filter((skill) => !current.some((item) => item.skillId === skill.skillId))]);
+            setSkillCategories(result.categories);
             setSkillPage(result.page);
             setSkillHasMore(result.hasMore);
         } finally {
@@ -540,7 +549,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
                 const requestConfig = resolveModelRequestConfig(agentConfig, selectedModel);
                 const logicalModelId = logicalModelIDForConfig(agentConfig);
                 const input = {
-                    canvasId, prompt: value, reasoningMode: reasoningSupported ? reasoningMode : "off", profileRevision: profileView.revision,
+                    canvasId, prompt: value, reasoningMode, profileRevision: profileView.revision,
                     model: modelOptionName(selectedModel) || undefined,
                     ...(logicalModelId ? { logicalModelId } : requestConfig.channelId ? { channelId: requestConfig.channelId, channelModelKey: modelOptionName(selectedModel) || undefined } : {}),
                     skillIds: [...new Set([...selectedSkillIds, ...resolveSkillMentions(value, installedSkills).map((skill) => skill.skillId)])],
@@ -684,6 +693,8 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
 
     const newConversation = () => {
         const id = nanoid();
+        const now = new Date().toISOString();
+        const inheritedSkillIds = [...selectedSkillIds];
         currentScope.current = `${canvasId}:${id}`;
         presetApplyingRef.current = null;
         setPresetApplyingId("");
@@ -695,10 +706,27 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
         setActiveConversationId(id);
         setRun(null);
         setMessages([]);
-        setSelectedSkillIds([]);
+        // Skills are a user-selected Agent workspace setting. Keep them when
+        // starting a fresh conversation so the skill picker does not appear to
+        // lose the skills the user just enabled.
+        setSelectedSkillIds(inheritedSkillIds);
         setPrompt("");
         setApproval(null);
         lastSeqRef.current = 0;
+        // Persist the blank conversation immediately. Otherwise the active id
+        // can point at no conversation after a reload, losing the inherited
+        // skill selection before the first message is sent.
+        setConversations((current) => [{
+            id,
+            title: "新对话",
+            messages: [],
+            run: null,
+            model: selectedModel || undefined,
+            permissionMode,
+            skillIds: inheritedSkillIds,
+            createdAt: now,
+            updatedAt: now,
+        }, ...current.filter((conversation) => conversation.messages.length > 0 || conversation.run)]);
         setView("chat");
     };
 
@@ -747,7 +775,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.985 }}
                         transition={{ duration: reducedMotion ? 0 : 0.26, ease: [0.16, 1, 0.3, 1] }}
-                        className="canvas-agent-panel fixed z-[var(--z-modal-overlay)] flex min-w-0 flex-col overflow-hidden"
+                        className="canvas-agent-panel fixed z-[calc(var(--z-toast)+1)] flex min-w-0 flex-col overflow-hidden"
                         style={{ ...panelLayout.style, "--agent-surface-base": theme.node.panel, "--agent-ink": theme.node.text, "--agent-accent": theme.accent.primary, "--agent-shadow-color": theme.spatial.shadow } as CSSProperties & Record<`--${string}`, string>}
                         aria-label="Agent 工作台"
                         data-canvas-no-zoom
@@ -909,9 +937,6 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
                                         submitAccessory={<AgentContextRing view={presentAgentContextUsage(contextUsage)} />}
                                         left={
                                             <ComposerControls
-                                                reasoningMode={reasoningSupported ? reasoningMode : "off"}
-                                                reasoningSupported={reasoningSupported}
-                                                onReasoningModeChange={(value) => { if (reasoningSupported) setReasoningMode(value); }}
                                                 config={config}
                                                 selectedModel={selectedModel}
                                                 permissionMode={permissionMode}
@@ -937,6 +962,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, se
                 marketSkills={marketSkills}
                 selectedSkillIds={selectedSkillIds}
                 categories={skillCategories}
+                libraryCategories={libraryCategories}
                 category={skillTag}
                 search={skillSearch}
                 loading={skillsLoading}
@@ -972,7 +998,7 @@ function AgentLauncher({ theme, statusColor, approvalPending, reducedMotion, onO
             type="button"
             aria-label={`打开${appearance.agentName}`}
             title={`${approvalPending ? "Agent 等待你的审批" : "打开 Agent 助手"} · 拖动可调整位置，聚焦后可用方向键移动`}
-            className={cn("canvas-agent-launcher fixed z-[var(--z-modal-overlay)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/35", dragging && "is-dragging", live && "canvas-agent-launcher-live2d")}
+            className={cn("canvas-agent-launcher fixed z-[calc(var(--z-toast)+1)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/35", dragging && "is-dragging", live && "canvas-agent-launcher-live2d")}
             style={{ ...position, width, height, color: theme.node.text, "--canvas-agent-launcher-shadow": theme.spatial.shadow } as CSSProperties}
             data-canvas-no-zoom
             {...handlers}
@@ -1243,6 +1269,9 @@ function AgentConversation({
     const contentRef = useRef<HTMLDivElement>(null);
     const followRef = useRef(true);
     const lastUserId = messages.findLast((item) => item.role === "user")?.id;
+    // 连续的工具记录折成一行（只报最新一步），计划/提问载体由输入区上方的固定条渲染。
+    const segments = useMemo(() => buildAgentFeedSegments(messages), [messages]);
+    const lastMessage = messages.at(-1);
 
     // 自己发送时恢复跟随；阅读旧消息时不让流式输出抢走滚动位置。
     useLayoutEffect(() => {
@@ -1271,9 +1300,16 @@ function AgentConversation({
         }}>
             {!messages.length ? <AgentWelcome appearance={appearance} nodeCount={nodeCount} onChooseSkill={onChooseSkill} onDraftPrompt={onDraftPrompt} /> : null}
             <div ref={contentRef} className="agent-conversation-messages">
-                {messages.map((item) => (
-                    <AgentChatMessage key={item.id} item={item} theme={theme} references={references} onFocusNode={onFocusNode} isStreaming={busy && !approval && item.streaming === true && item === messages.at(-1)} />
-                ))}
+                {segments.map((segment, index) =>
+                    segment.kind === "operations" ? (
+                        // 只有"对话末尾那一段 + 还在跑"才流光：历史段落留在静态态，任务完成即停。
+                        <AgentOperationFeed key={segment.key} items={segment.items} theme={theme} references={references} onFocusNode={onFocusNode} live={busy && index === segments.length - 1} />
+                    ) : segment.kind === "reasoning" ? (
+                        <AgentReasoningFeed key={segment.key} items={segment.items} theme={theme} />
+                    ) : (
+                        <AgentChatMessage key={segment.key} item={segment.item} theme={theme} references={references} onFocusNode={onFocusNode} isStreaming={busy && !approval && segment.item.streaming === true && segment.item === lastMessage} />
+                    ),
+                )}
                 {approval ? <ApprovalCard key={approval.approvalId} approval={approval} theme={theme} submitting={approvalSubmitting} onFocusNode={onFocusNode} onReasonChange={onApprovalReasonChange} onApprove={onApprove} onReject={onReject} /> : null}
                 {busy && !approval ? (
                     <AgentWorkingMessage theme={theme} label="正在处理当前画布" />
@@ -1284,9 +1320,6 @@ function AgentConversation({
 }
 
 function ComposerControls({
-    reasoningMode,
-    reasoningSupported,
-    onReasoningModeChange,
     config,
     selectedModel,
     permissionMode,
@@ -1297,9 +1330,6 @@ function ComposerControls({
     onSkillsOpenChange,
     selectedSkillCount,
 }: {
-    reasoningMode: AgentReasoningMode;
-    reasoningSupported: boolean;
-    onReasoningModeChange: (value: AgentReasoningMode) => void;
     config: ReturnType<typeof useEffectiveConfig>;
     selectedModel: string;
     permissionMode: AgentPermissionMode;
@@ -1327,11 +1357,6 @@ function ComposerControls({
                 showOptionPrices
                 placeholder="选择文本模型"
             />
-            {reasoningSupported ? <Dropdown trigger={["click"]} placement="topLeft" menu={{ items: reasoningMenuItems(reasoningMode, onReasoningModeChange) }}>
-                <button type="button" aria-label="选择 Agent 推理模式" title="推理模式：只用于规划和工具选择" className="flex h-8 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/25" style={{ color: reasoningMode === "off" ? theme.node.muted : theme.accent.primary, background: reasoningMode === "off" ? "transparent" : theme.node.fill }}>
-                    <Sparkles className="size-3.5" />{reasoningModeLabel(reasoningMode)}
-                </button>
-            </Dropdown> : null}
             <Dropdown trigger={["click"]} placement="topLeft" menu={{ items: agentPermissionMenuItems(permissionMode, onPermissionChange) }}>
                 <button
                     type="button"
@@ -1358,19 +1383,6 @@ function ComposerControls({
             </button>
         </div>
     );
-}
-
-const reasoningLabels: Record<AgentReasoningMode, string> = { off: "直达", auto: "自动推理", deep: "深入推理" };
-
-function reasoningModeLabel(mode: AgentReasoningMode) { return reasoningLabels[mode]; }
-
-function reasoningMenuItems(mode: AgentReasoningMode, onChange: (value: AgentReasoningMode) => void) {
-    return (Object.keys(reasoningLabels) as AgentReasoningMode[]).map((value) => ({
-        key: value,
-        label: reasoningLabels[value],
-        icon: value === mode ? <Check className="size-3.5" /> : undefined,
-        onClick: () => onChange(value),
-    }));
 }
 
 function ApprovalCard({ approval, theme, submitting, onFocusNode, onReasonChange, onApprove, onReject }: { approval: ApprovalState; theme: CanvasTheme; submitting: boolean; onFocusNode?: (nodeId: string) => void; onReasonChange: (value: string) => void; onApprove: (settings?: AgentMediaSettings) => void; onReject: () => void }) {
@@ -1465,7 +1477,9 @@ function applyAgentEvent(event: AgentEvent, setMessages: Dispatch<SetStateAction
         if (terminal) {
             setMessages((current) => current.map((message) => message.id === `plan-${event.runId}` && message.planItems?.length ? { ...message, planTerminal: true, streaming: false } : message));
         }
-        if (payload.failureMessage) setMessages((current) => appendAgentError(current, `terminal-${event.runId}`, String(payload.failureMessage)));
+        if (terminal && nextStatus === "failed" && payload.failureMessage) {
+            setMessages((current) => appendAgentError(current, `terminal-${event.runId}`, String(payload.failureMessage), "Agent 执行失败", { severity: "error" }));
+        }
         if (snapshotApproval && !snapshotApproval.decision && snapshotApproval.approvalId) {
             setApproval((current) => ({ approvalId: snapshotApproval.approvalId, detail: snapshotApproval, reason: current?.approvalId === snapshotApproval.approvalId ? current.reason : snapshotApproval.reason || "" }));
         } else {
@@ -1539,7 +1553,7 @@ function applyAgentEvent(event: AgentEvent, setMessages: Dispatch<SetStateAction
             id,
             role: "assistant",
             text: "",
-            question: { question, options, allowFreeform: payload.allowFreeform !== false },
+            question: { question, options, allowFreeform: payload.allowFreeform !== false, round: Number.isFinite(Number(payload.round)) ? Number(payload.round) : undefined, maxRounds: Number.isFinite(Number(payload.maxRounds)) ? Number(payload.maxRounds) : undefined },
         }));
         return;
     }
@@ -1567,6 +1581,26 @@ function applyAgentEvent(event: AgentEvent, setMessages: Dispatch<SetStateAction
         const message: CloudAgentChatMessage = { id: event.eventId, role: "tool", title: String(payload.toolName || "工具执行"), text, detail: { ...payload, eventType: event.type } };
         setMessages((current) => mergeAgentToolRetry(current, message));
         if (event.type === "tool_failed") return;
+    }
+    if (event.type === "tool_completed" && payload.toolName === "director_preview") {
+        const result = payload.result && typeof payload.result === "object" ? payload.result as Record<string, unknown> : {};
+        window.dispatchEvent(new CustomEvent("director:preview-requested", {
+            detail: {
+                sceneId: String(result.sceneId || ""),
+                shotId: String(result.shotId || ""),
+                duration: Number(result.duration || 0),
+                fps: Number(result.fps || 0),
+                previewRequestId: String(result.previewRequestId || payload.callId || ""),
+            },
+        }));
+        setMessages((current) => appendUniqueMessage(current, {
+            id: event.eventId,
+            role: "tool",
+            title: "director_preview",
+            text: text || "已请求导演台生成白模预演",
+            detail: { ...payload, eventType: event.type },
+        }));
+        return;
     }
     if (event.type === "tool_completed" && payload.toolName === "canvas_apply_ops" && payload.callId) {
         const id = `canvas-${event.runId}-${payload.callId}`;
@@ -1676,11 +1710,11 @@ function upsertTextMessage(current: CloudAgentChatMessage[], id: string, text: s
     return next;
 }
 
-function appendAgentError(current: CloudAgentChatMessage[], id: string, cause: unknown, fallback?: string) {
+function appendAgentError(current: CloudAgentChatMessage[], id: string, cause: unknown, fallback?: string, options?: { severity?: CloudAgentChatMessage["errorSeverity"] }) {
     const message = agentErrorPresentation(cause, fallback);
     const last = current.at(-1);
     if (last?.role === "error" && last.title === message.title && last.text === message.text) return current;
-    return appendUniqueMessage(current, { id, role: "error", ...message });
+    return appendUniqueMessage(current, { id, role: "error", ...message, ...(options?.severity ? { errorSeverity: options.severity } : {}) });
 }
 
 function isNotFoundError(cause: unknown) {
