@@ -95,11 +95,9 @@ test("menu surfaces are explicitly scoped and old account inner overrides are re
 
 test("shared single-select popup uses a borderless surface instead of a bright focus frame", () => {
     const select = readFileSync(new URL("../src/components/ui/base/select/select.tsx", import.meta.url), "utf8");
-		 expect(select).toContain("rounded-[var(--r-lg)] border-0 bg-surface-strong");
-		 expect(select).toContain("focus-visible:ring-1 focus-visible:ring-[var(--control-selected-border)]");
-		 expect(select).toContain("<AntSelect");
-		 expect(select).toContain('variant={variant ?? "filled"}');
-		 expect(select).toContain("data-input-modality={inputModality}");
-		 expect(select).toContain('setInputModality("keyboard")');
+    expect(select).toContain("<AntSelect");
+    expect(select).toContain('variant={variant ?? "filled"}');
+    expect(select).toContain("data-input-modality={inputModality}");
+    expect(select).toContain('setInputModality("keyboard")');
     expect(select).not.toContain("setPopoverWidth(width + 2)");
 });

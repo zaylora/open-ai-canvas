@@ -1,5 +1,10 @@
 ﻿# CHANGELOG
 
+## v1.5.8-zaylora.2
+
+- 修复发布检查发现的 5 个前端文件 Prettier 格式问题，并同步工具卡折叠文案与 Select 控件回归断言。
+- 验证：changed-formatting 检查、TypeScript 类型检查及相关前端专项测试通过。
+
 ## v1.5.8-zaylora.1
 
 - 合并上游 `ddcat-ai/open-ai-canvas` main（`v1.5.8`），同步云端 Agent、技能库、导演工作台和数据库迁移更新。
