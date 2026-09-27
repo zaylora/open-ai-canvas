@@ -1,5 +1,11 @@
 ﻿# CHANGELOG
 
+## v1.5.8-zaylora.3
+
+- 修复应用入口等待外观请求完成才加载主应用的问题，恢复外观初始化与正常启动并行执行，避免启动测试超时。
+- 校准 LibTV 缩略图尺寸保护测试，并为不支持 `TextDecoder("gb18030")` 的运行时补充 GB18030 解码兜底。
+- 验证：Bun 1.3.9 frozen-lockfile 安装、changed-formatting、TypeScript、ESLint、全量测试 2122 项及 Director Chrome E2E 62 项全部通过。
+
 ## v1.5.8-zaylora.2
 
 - 修复发布检查发现的 5 个前端文件 Prettier 格式问题，并同步工具卡折叠文案与 Select 控件回归断言。

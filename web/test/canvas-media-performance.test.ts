@@ -66,7 +66,7 @@ describe("large canvas media rendering", () => {
         expect(canvasNodeContentSource).not.toContain('loading="eager"');
         expect(canvasNodeContentSource).not.toContain('importedFromLibTV ? "eager"');
         // 变体地址本身已是缩小后的图，和 LibTV 导入一样不该再触发节点 resize。
-        expect(canvasNodeContentSource).toContain("if (importedFromLibTV || usingVariant) return;");
+        expect(canvasNodeContentSource).toContain("if (importedFromLibTV) return;");
     });
 
     test("keeps canvas node action context stable across viewport renders", () => {

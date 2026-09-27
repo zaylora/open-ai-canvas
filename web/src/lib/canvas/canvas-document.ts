@@ -1,3 +1,5 @@
+import iconv from "iconv-lite";
+
 const maxChapterHeadingLength = 120;
 const chineseChapterNumber = "[零〇○一二两三四五六七八九十百千万亿壹贰叁肆伍陆柒捌玖拾佰仟\\d]+";
 const englishChapterNumber = "(?:\\d+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)";
@@ -41,7 +43,12 @@ export function decodeNovelText(buffer: ArrayBuffer) {
         return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } catch {
         // 中文网文 TXT 常由旧版编辑器导出为 GBK；GB18030 兼容 GBK，并能覆盖更多汉字。
-        return new TextDecoder("gb18030").decode(bytes);
+        try {
+            return new TextDecoder("gb18030").decode(bytes);
+        } catch {
+            // Bun does not expose the legacy label while browsers vary by runtime.
+            return iconv.decode(bytes, "gb18030");
+        }
     }
 }
 
