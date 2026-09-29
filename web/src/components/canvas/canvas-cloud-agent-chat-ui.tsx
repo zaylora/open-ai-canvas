@@ -1,7 +1,20 @@
 import { agentCanvasActions, agentCanvasActionLabel } from "@/lib/canvas/agent-canvas-actions";
 import { Button } from "antd";
 import { Tooltip } from "@/components/ui/base/tooltip";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SyntheticEvent } from "react";
+import {
+    useCallback,
+    useEffect,
+    useId,
+    useMemo,
+    useRef,
+    useState,
+    type ClipboardEvent as ReactClipboardEvent,
+    type CSSProperties,
+    type KeyboardEvent as ReactKeyboardEvent,
+    type PointerEvent as ReactPointerEvent,
+    type ReactNode,
+    type SyntheticEvent,
+} from "react";
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -1074,7 +1087,17 @@ export function AgentQuestionBar({ question, theme, onAnswer, disabled = false }
             displayAnswers[field.id] = option?.label || value;
         }
         const fieldTitles = Object.fromEntries(fields.map((field) => [field.id, field.title]));
-        onAnswer(JSON.stringify({ type: "form_answer", questionId: question.questionId, answers, displayAnswers, fieldTitles, skippedFields: fields.filter((field) => !String(answers[field.id] || "").trim()).map((field) => field.id), useRecommendedDefaults: useDefaults }));
+        onAnswer(
+            JSON.stringify({
+                type: "form_answer",
+                questionId: question.questionId,
+                answers,
+                displayAnswers,
+                fieldTitles,
+                skippedFields: fields.filter((field) => !String(answers[field.id] || "").trim()).map((field) => field.id),
+                useRecommendedDefaults: useDefaults,
+            }),
+        );
     };
 
     const stop = (event: SyntheticEvent) => {
