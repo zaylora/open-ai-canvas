@@ -2564,7 +2564,7 @@ func (s *Service) resumeCloudAgentAfterApproval(userID, id string, state *cloudA
 	if err := s.saveCloudAgentPiResumePrompt(userID, id, state.PiResumePrompt); err != nil {
 		return err
 	}
-	s.startCloudAgentPi(userID, id)
+	s.restartCloudAgentPi(userID, id)
 	return nil
 }
 

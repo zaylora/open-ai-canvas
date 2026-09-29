@@ -185,6 +185,29 @@ func (s *Service) stopCloudAgentPi(runID string) {
 	}
 }
 
+// restartCloudAgentPi stops the paused session before starting the resumed one.
+// A Pi session can still be unwinding after it emits an approval request; starting
+// immediately would be deduplicated by piRunners and lose the follow-up turn.
+func (s *Service) restartCloudAgentPi(userID, runID string) {
+	if s == nil || runID == "" {
+		return
+	}
+	s.stopCloudAgentPi(runID)
+	go func() {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			s.piRunnerMu.Lock()
+			_, running := s.piRunners[runID]
+			s.piRunnerMu.Unlock()
+			if !running {
+				s.startCloudAgentPi(userID, runID)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+}
+
 func (s *Service) recoverCloudAgentPiRunners() {
 	if s == nil || s.repo == nil {
 		return
