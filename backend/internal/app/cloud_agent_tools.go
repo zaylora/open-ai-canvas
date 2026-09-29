@@ -437,19 +437,30 @@ func compileCloudAgentTools(req CloudAgentRequest, includeProfileTool bool) []ma
 		map[string]any{"items": map[string]any{"type": "array", "maxItems": 20, "items": map[string]any{"type": "object", "properties": map[string]any{"id": str("短标识，如 1"), "title": str("这一项要做什么"), "status": map[string]any{"type": "string", "enum": []string{"pending", "doing", "done"}}}, "required": []string{"id", "title", "status"}, "additionalProperties": false}}},
 		"items")
 	add("ask_user",
-		"创作需求有多个合理方向，或信息不足且假设显著影响结果时，先调用本工具给一个问题和 2-6 个可点选项；不要只在正文列候选，正文没有选项面板。本轮就此收尾，用户点选或自行输入后自动续轮。已指定方向、授权自主决定、存在安全默认值或明确说“直接开始”时不要问，直接执行。一次只问一件事；服务端最多允许 2 轮确认，达到上限后会要求你采用安全默认值继续并说明假设。",
+		"创作需求存在会显著影响结果的歧义时才调用本工具。本轮只问一次：简单单项决策使用 options；多个相关参数（题材、画幅、画风、模型偏好、补充说明等）使用 fields 返回一张带推荐值、可编辑、可跳过非必填项的紧凑表单。已指定方向、授权自主决定、存在安全默认值或明确说“直接开始”时不要问，直接执行。本轮就此收尾，用户提交后自动续轮；服务端最多允许 2 轮确认。",
 		map[string]any{
-			"question": str("要用户决定的这一个问题，一句话说清"),
+			"question":   str("要用户确认的主题，一句话说清"),
+			"questionId": str("可选的稳定问题标识"),
 			"options": map[string]any{"type": "array", "minItems": 2, "maxItems": 6, "items": map[string]any{
 				"type":       "object",
-				"properties": map[string]any{"label": str("选项文字（用户点它即把这句话作为回答）"), "detail": str("可选：一句补充说明")},
+				"properties": map[string]any{"label": str("选项文字"), "detail": str("可选：一句补充说明")},
 				"required":   []string{"label"}, "additionalProperties": false,
 			}},
-			"allowFreeform": map[string]any{"type": "boolean", "description": "是否同时允许用户自己输入（默认允许）"},
+			"fields": map[string]any{"type": "array", "minItems": 1, "maxItems": 6, "description": "多个相关创作参数组成的动态表单；与 options 二选一", "items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id": str("稳定字段 ID，如 aspectRatio"), "title": str("字段显示名称"),
+					"type":         map[string]any{"type": "string", "enum": []string{"single_select", "segmented", "text", "textarea", "model_picker"}},
+					"options":      map[string]any{"type": "array", "maxItems": 8, "items": map[string]any{"type": "object", "properties": map[string]any{"id": str("稳定选项 ID"), "label": str("选项名称"), "detail": str("可选说明"), "recommended": map[string]any{"type": "boolean"}}, "required": []string{"label"}, "additionalProperties": false}},
+					"defaultValue": str("推荐默认值；可选"), "required": map[string]any{"type": "boolean"}, "allowCustom": map[string]any{"type": "boolean"}, "placeholder": str("可选输入提示"),
+				},
+				"required": []string{"id", "title", "type"}, "additionalProperties": false,
+			}},
+			"allowFreeform": map[string]any{"type": "boolean", "description": "是否允许在表单外补充说明（默认允许）"},
 			"round":         map[string]any{"type": "integer", "minimum": 1, "maximum": cloudAgentMaxConfirmationRounds, "description": "可选确认轮次；服务端以持久化轮次为准"},
 			"maxRounds":     map[string]any{"type": "integer", "minimum": 1, "maximum": cloudAgentMaxConfirmationRounds, "description": "可选确认上限；服务端以固定上限为准"},
 		},
-		"question", "options")
+		"question")
 	if len(req.ContextScope) > 0 {
 		add("director_scene_read", "读取当前画布的导演台白模场景摘要。只返回场景、镜头、演员、道具和空间关系所需的安全字段，不返回模型 URL、存储 key、密钥或完整导演场景 JSON；先读再编辑/预演。", map[string]any{
 			"sceneId":   str("可选的导演场景 ID；省略时返回场景目录"),
@@ -542,14 +553,14 @@ func compileCloudAgentTools(req CloudAgentRequest, includeProfileTool bool) []ma
 			"y":            map[string]any{"type": "number"},
 		}, "snapshotHash", "nodeId", "title", "rows")
 		add("canvas_edit_storyboard", "追加、修改或删除分镜脚本中的单个镜头行。必须先用 canvas_read_storyboard 读取最新 snapshotHash 和真实 rowId；append 不传 rowId，update/remove 必须传。patch 只允许镜头文本与时长，不能修改素材绑定、媒体节点ID、任务状态、资源URL或任意 metadata。", map[string]any{
-			"snapshotHash": str("最近一次分镜读取返回的 snapshotHash"),
+			"snapshotHash": str("最近一次 canvas_read_storyboard 返回的 snapshotHash（这个分镜节点的版本；其它节点的改动不影响它）"),
 			"nodeId":       str("真实分镜脚本节点ID"),
 			"action":       map[string]any{"type": "string", "enum": []string{"append", "update", "remove"}},
 			"rowId":        str("update/remove 使用 canvas_read_storyboard 返回的真实 rowId；append 留空"),
 			"patch":        cloudAgentStoryboardPatchSchema(),
 		}, "snapshotHash", "nodeId", "action")
 		add("canvas_edit_batch_table", "操作批量创作表组件：追加、修改或删除任务行，切换批量换装/创意生图，设置1/5/10并发，新增或减少参考图列，或设置覆盖各任务的全局提示词。必须先用 canvas_read_batch_table 获取最新 snapshotHash 和真实 rowId。行 patch 仅允许 enabled、inputNodeIds、prompt；prompt 可使用读取结果中的 @参考图1、@参考图2 等 mentionToken 指代本行对应位置的图片。append 未传 inputNodeIds 时会继承上一行参考图；图片ID必须来自当前画布。不能写 outputNodeId、任务状态、URL、storageKey 或任意 metadata。本工具只编辑计划，不提交收费生成。", map[string]any{
-			"snapshotHash": str("最近一次批量创作表读取返回的 snapshotHash"),
+			"snapshotHash": str("最近一次 canvas_read_batch_table 返回的 snapshotHash（这个表节点的版本；其它节点的改动不影响它）"),
 			"nodeId":       str("真实批量创作表节点ID"),
 			"action":       map[string]any{"type": "string", "enum": []string{"append", "update", "remove", "set_operation", "set_concurrency", "add_reference_column", "remove_reference_column", "set_global_prompt"}},
 			"rowId":        str("update/remove 使用 canvas_read_batch_table 返回的真实 rowId；其他操作留空"),
@@ -1000,7 +1011,7 @@ func cloudAgentReadTool(repo *repository.Repository, userID string, state *cloud
 		if err != nil {
 			return nil, err
 		}
-		return cloudAgentStoryboardReadResult(view, args.NodeID)
+		return cloudAgentStoryboardReadResult(view, args.NodeID, cloudAgentNodeHash(doc, args.NodeID))
 	case "canvas_read_batch_table":
 		var args struct {
 			NodeID string `json:"nodeId"`
@@ -1027,7 +1038,7 @@ func cloudAgentReadTool(repo *repository.Repository, userID string, state *cloud
 		if err != nil {
 			return nil, err
 		}
-		return cloudAgentBatchTableReadResult(view, args.NodeID)
+		return cloudAgentBatchTableReadResult(view, args.NodeID, cloudAgentNodeHash(doc, args.NodeID))
 	case "image_text_detect":
 		var args struct {
 			NodeID string `json:"nodeId"`

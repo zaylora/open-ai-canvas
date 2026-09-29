@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -21,6 +22,44 @@ import (
 
 // A deterministic checkpoint failure must not be retried forever like a transient DB error.
 var errCloudAgentCheckpoint = errors.New("invalid Agent checkpoint")
+
+// cloudAgentCheckpointError keeps the save stage attached to a deterministic
+// checkpoint failure.  Previously every failure was flattened to the same
+// sentinel and advanceCloudAgent consequently told users that context had
+// overflowed even when the actual problem was a corrupt event or an encoding
+// failure.
+type cloudAgentCheckpointError struct {
+	Stage string
+	Err   error
+}
+
+func (e *cloudAgentCheckpointError) Error() string {
+	if e == nil {
+		return errCloudAgentCheckpoint.Error()
+	}
+	if e.Stage == "" {
+		return fmt.Sprintf("%v: %v", errCloudAgentCheckpoint, e.Err)
+	}
+	return fmt.Sprintf("%v (%s): %v", errCloudAgentCheckpoint, e.Stage, e.Err)
+}
+
+func (e *cloudAgentCheckpointError) Unwrap() error {
+	if e == nil {
+		return errCloudAgentCheckpoint
+	}
+	return e.Err
+}
+
+func (e *cloudAgentCheckpointError) Is(target error) bool {
+	return target == errCloudAgentCheckpoint || (e != nil && errors.Is(e.Err, target))
+}
+
+func cloudAgentCheckpointFailure(stage string, err error) error {
+	if err == nil {
+		err = errors.New("unknown checkpoint failure")
+	}
+	return &cloudAgentCheckpointError{Stage: stage, Err: err}
+}
 
 type CloudAgentEvent struct {
 	EventID   string         `json:"eventId"`
@@ -127,9 +166,16 @@ type cloudAgentRuntime struct {
 	ConfirmationFingerprints       []string                                `json:"confirmationFingerprints,omitempty"`
 	PendingConfirmationFingerprint string                                  `json:"pendingConfirmationFingerprint,omitempty"`
 	PendingInterjections           []cloudAgentInterjection                `json:"pendingInterjections,omitempty"`
+	PiResumePrompt                 string                                  `json:"piResumePrompt,omitempty"`
 	TransientReferences            map[string]cloudAgentTransientReference `json:"transientReferences,omitempty"`
 	InterjectionIDs                []string                                `json:"interjectionIds,omitempty"`
 	Events                         []CloudAgentEvent                       `json:"events"`
+	// PiAssistantResponses counts successful assistant message_end events from
+	// the Pi runtime. Completion must not be inferred from a clean Node exit:
+	// a provider/session error can otherwise be reported as a successful run.
+	PiAssistantResponses int    `json:"piAssistantResponses,omitempty"`
+	IsGenerating         bool   `json:"isGenerating,omitempty"`
+	LastError            string `json:"lastError,omitempty"`
 	// EmptyOutputEscalated 记录"空输出已经升级重试过几次"（关思考 + 放大输出预算）。
 	EmptyOutputEscalated int `json:"emptyOutputEscalated,omitempty"`
 	// StepTimeoutEscalated 记录"单步墙钟到点后已经关思考重试过几次"。
@@ -221,7 +267,17 @@ func (s *Service) ensureCloudAgentExecution(task *model.Task, initial cloudAgent
 	if err != nil {
 		return err
 	}
-	state := cloudAgentRuntime{Request: initial.Request, Policy: initial.Policy, ParentID: initial.ParentID, Fingerprint: initial.Fingerprint, CreativeAnchor: initial.CreativeAnchor, TextHistory: input.TextHistory, Skills: initial.Skills, Profile: initial.Profile, Canonical: canonical, ActiveTaskID: task.ID, TaskIDs: []string{task.ID}, Step: 1, Decisions: map[string]string{}, Plan: initial.Plan, ConfirmationRounds: initial.ConfirmationRounds, ConfirmationFingerprints: append([]string(nil), initial.ConfirmationFingerprints...), PendingConfirmationFingerprint: "", Events: []CloudAgentEvent{}, StepLimits: limits}
+	carrier := task.Status == model.TaskStatusTextReplay
+	// The Pi root is a non-billable control-plane carrier, but it is still the
+	// durable task identity for this run. Keep it in TaskIDs even though it is
+	// not an active model task; validation and recovery use TaskIDs as the run's
+	// immutable task-history anchor. Leaving this nil makes every new Pi run
+	// fail its first checkpoint with "Agent runtime task history is invalid".
+	state := cloudAgentRuntime{Request: initial.Request, Policy: initial.Policy, ParentID: initial.ParentID, Fingerprint: initial.Fingerprint, CreativeAnchor: initial.CreativeAnchor, TextHistory: input.TextHistory, Skills: initial.Skills, Profile: initial.Profile, Canonical: canonical, ActiveTaskID: "", TaskIDs: []string{task.ID}, Step: 0, Decisions: map[string]string{}, Plan: initial.Plan, ConfirmationRounds: initial.ConfirmationRounds, ConfirmationFingerprints: append([]string(nil), initial.ConfirmationFingerprints...), PendingConfirmationFingerprint: "", Events: []CloudAgentEvent{}, StepLimits: limits}
+	if !carrier {
+		state.ActiveTaskID = task.ID
+		state.Step = 1
+	}
 	if len(initial.Skills) > 0 {
 		// skillIds makes the enablement auditable: usage telemetry can attribute a
 		// run to the skills it actually loaded instead of only counting the total.
@@ -232,6 +288,16 @@ func (s *Service) ensureCloudAgentExecution(task *model.Task, initial cloudAgent
 		state.event(task.ID, "tool_completed", map[string]any{"toolName": "skills_load", "skillIds": skillIDs, "text": fmt.Sprintf("已启用 %d 个技能，正文将按需读取", len(initial.Skills))})
 	}
 	pressure := s.cloudAgentContextPressure(input.Requests.Canonical, initial.Request.Prompt, initial.Request)
+	if carrier {
+		// The carrier is deliberately not a model call. Pi will create the first
+		// governed cloud_agent_step through the model bridge below.
+		state.ContextWindowKnown = pressure.ModelLimitConfigured
+		run := &model.CloudAgentExecution{ID: task.ID, UserID: task.UserID, Status: "running", Revision: 1, CreatedAt: task.CreatedAt, UpdatedAt: time.Now()}
+		if err := cloudAgentSave(run, &state); err != nil {
+			return err
+		}
+		return s.repo.EnsureCloudAgent(run)
+	}
 	// 第一步的模型调用就是根任务本身（不经过 enqueueCloudAgentTask）：在这里登记任务 id
 	// 与本次请求的本地计价，它回来时才能与上游实测配成锚点。根任务的操作名是
 	// cloud_agent，但它就是第一步的模型调用，按"步骤"口径登记，否则回来配锚点时会被
@@ -625,6 +691,79 @@ func cloudAgentContainsString(values []string, target string) bool {
 	}
 	return false
 }
+
+const cloudAgentStateJSONLimit = 512 << 10
+
+func cloudAgentCheckpointJSON(state *cloudAgentRuntime) ([]byte, error) {
+	checkpoint := *state
+	checkpoint.Canonical.Messages = nil
+	checkpoint.TextHistory = nil
+	checkpoint.Events = nil
+	return json.Marshal(checkpoint)
+}
+
+// cloudAgentPruneReadCacheForCheckpoint is a last-resort durability guard.
+// ToolReadResults is a replay cache: losing one entry means a later read may
+// execute again, but allowing that cache to make the whole runtime impossible
+// to checkpoint loses the run and prevents context compaction from starting.
+// Remove the largest entries first so a single oversized canvas/skill result
+// cannot strand the run above the 512 KiB state limit.
+func cloudAgentPruneReadCacheForCheckpoint(state *cloudAgentRuntime, limit int) (removed int) {
+	if state == nil || len(state.ToolReadResults) == 0 || limit <= 0 {
+		return 0
+	}
+	raw, err := cloudAgentCheckpointJSON(state)
+	if err != nil || len(raw) <= limit {
+		return 0
+	}
+	type candidate struct {
+		key       string
+		bytes     int
+		inContext bool
+		error     bool
+	}
+	candidates := make([]candidate, 0, len(state.ToolReadResults))
+	for key, cached := range state.ToolReadResults {
+		entryBytes, _ := json.Marshal(cached)
+		candidates = append(candidates, candidate{
+			key:       key,
+			bytes:     len(entryBytes),
+			inContext: cloudAgentReadResultInContext(state, cached.Result),
+			error:     cached.Error != "",
+		})
+	}
+	// Prefer dropping errors and entries already absent from the current
+	// transcript. Keep results currently visible to the model for as long as
+	// possible because compaction may need them for a replay after eviction.
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].inContext != candidates[j].inContext {
+			return !candidates[i].inContext
+		}
+		if candidates[i].error != candidates[j].error {
+			return candidates[i].error
+		}
+		if candidates[i].bytes != candidates[j].bytes {
+			return candidates[i].bytes > candidates[j].bytes
+		}
+		return candidates[i].key < candidates[j].key
+	})
+	for _, item := range candidates {
+		if raw, err = cloudAgentCheckpointJSON(state); err != nil || len(raw) <= limit {
+			break
+		}
+		delete(state.ToolReadResults, item.key)
+		delete(state.ToolReadReplays, item.key)
+		removed++
+	}
+	if len(state.ToolReadResults) == 0 {
+		state.ToolReadResults = nil
+	}
+	if len(state.ToolReadReplays) == 0 {
+		state.ToolReadReplays = nil
+	}
+	return removed
+}
+
 func cloudAgentSave(run *model.CloudAgentExecution, state *cloudAgentRuntime) error {
 	if run == nil || state == nil {
 		return errors.New("Agent runtime state is missing")
@@ -639,25 +778,31 @@ func cloudAgentSave(run *model.CloudAgentExecution, state *cloudAgentRuntime) er
 	}
 	if run.ID != "" {
 		if err := validateCloudAgentRuntime(run, state); err != nil {
-			return fmt.Errorf("%w: %v", errCloudAgentCheckpoint, err)
+			return cloudAgentCheckpointFailure("runtime validation", err)
 		}
 		for index, event := range state.Events {
 			sequence := state.EventSeqBase + index + 1
 			if event.Seq != sequence || event.RunID != run.ID || event.EventID != fmt.Sprintf("%s:%d", run.ID, sequence) {
-				return fmt.Errorf("%w: Agent event sequence or identity is invalid", errCloudAgentCheckpoint)
+				return cloudAgentCheckpointFailure("event identity", errors.New("Agent event sequence or identity is invalid"))
 			}
 		}
 	}
-	checkpoint := *state
-	checkpoint.Canonical.Messages = nil
-	checkpoint.TextHistory = nil
-	checkpoint.Events = nil
-	raw, err := json.Marshal(checkpoint)
+	// The canonical transcript and event journal are persisted separately. The
+	// bounded StateJSON therefore contains only runtime metadata and replay
+	// caches, and the latter must never be allowed to block a checkpoint.
+	raw, err := cloudAgentCheckpointJSON(state)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errCloudAgentCheckpoint, err)
+		return cloudAgentCheckpointFailure("state encode", err)
 	}
-	if len(raw) > 512<<10 {
-		return fmt.Errorf("%w: Agent 状态超过 512KB 上限", errCloudAgentCheckpoint)
+	if len(raw) > cloudAgentStateJSONLimit {
+		cloudAgentPruneReadCacheForCheckpoint(state, cloudAgentStateJSONLimit)
+		raw, err = cloudAgentCheckpointJSON(state)
+		if err != nil {
+			return cloudAgentCheckpointFailure("state encode after cache pruning", err)
+		}
+	}
+	if len(raw) > cloudAgentStateJSONLimit {
+		return cloudAgentCheckpointFailure("state size", fmt.Errorf("Agent 状态超过 512KB 上限（%d bytes）", len(raw)))
 	}
 	run.CanvasID, run.ActiveTaskID, run.MediaTaskID = state.Request.CanvasID, state.ActiveTaskID, state.MediaTaskID
 	run.ParentID = state.ParentID
@@ -671,7 +816,7 @@ func cloudAgentSave(run *model.CloudAgentExecution, state *cloudAgentRuntime) er
 	for _, event := range state.Events {
 		body, err := json.Marshal(event)
 		if err != nil {
-			return fmt.Errorf("%w: encode Agent event: %v", errCloudAgentCheckpoint, err)
+			return cloudAgentCheckpointFailure("event encode", err)
 		}
 		run.Journal = append(run.Journal, model.CloudAgentEventRecord{RunID: run.ID, UserID: run.UserID, Sequence: event.Seq, EventJSON: string(body), CreatedAt: event.CreatedAt})
 	}
@@ -679,14 +824,14 @@ func cloudAgentSave(run *model.CloudAgentExecution, state *cloudAgentRuntime) er
 	for index, message := range state.Canonical.Messages {
 		body, err := json.Marshal(message)
 		if err != nil {
-			return fmt.Errorf("%w: encode Agent message: %v", errCloudAgentCheckpoint, err)
+			return cloudAgentCheckpointFailure("canonical message encode", err)
 		}
 		run.Transcript = append(run.Transcript, model.CloudAgentMessageRecord{RunID: run.ID, UserID: run.UserID, Kind: "canonical", Sequence: index + 1, MessageJSON: string(body)})
 	}
 	for index, message := range state.TextHistory {
 		body, err := json.Marshal(message)
 		if err != nil {
-			return fmt.Errorf("%w: encode Agent history: %v", errCloudAgentCheckpoint, err)
+			return cloudAgentCheckpointFailure("history encode", err)
 		}
 		run.Transcript = append(run.Transcript, model.CloudAgentMessageRecord{RunID: run.ID, UserID: run.UserID, Kind: "history", Sequence: index + 1, MessageJSON: string(body)})
 	}
@@ -858,7 +1003,17 @@ func (s *Service) wakeCloudAgentScheduler() {
 func (s *Service) advanceCloudAgent(run *model.CloudAgentExecution) (err error) {
 	defer func() {
 		if errors.Is(err, errCloudAgentCheckpoint) {
-			err = s.terminateCloudAgent(run, "Agent 上下文或执行记录超过安全限制，本轮已停止；已有任务结果保留在任务中心")
+			message := "Agent 运行状态保存失败，本轮已停止；已有任务结果保留在任务中心"
+			var checkpointErr *cloudAgentCheckpointError
+			if errors.As(err, &checkpointErr) {
+				log.Printf("agent checkpoint rejected run=%s stage=%s error=%v", run.ID, checkpointErr.Stage, checkpointErr.Err)
+				if checkpointErr.Stage == "state size" {
+					message = "Agent 上下文或执行记录超过安全限制，本轮已停止；已有任务结果保留在任务中心"
+				}
+			} else {
+				message = "Agent 运行状态保存失败，本轮已停止；已有任务结果保留在任务中心"
+			}
+			err = s.terminateCloudAgent(run, message)
 		}
 	}()
 	if run.CleanupPending {
@@ -1263,26 +1418,11 @@ func cloudAgentSafeUserMessage(message string) bool {
 // while refusing provider details that commonly contain URLs, credentials, or
 // internal request metadata. Task.Error is not a safe presentation field.
 func cloudAgentSafeMediaTaskError(task *model.Task) string {
-	if task == nil {
+	if task == nil || strings.TrimSpace(task.Error) == "" {
 		return "媒体任务未成功"
 	}
-	detail := strings.TrimSpace(task.Error)
-	if detail == "" || !utf8.ValidString(detail) || strings.ContainsAny(detail, "\r\n\x00") {
-		return "媒体任务未成功"
-	}
-	lower := strings.ToLower(detail)
-	for _, marker := range []string{
-		"http://", "https://", "ftp://", "authorization", "cookie", "secret", "token", "api_key", "apikey", "x-api-key",
-	} {
-		if strings.Contains(lower, marker) {
-			return "媒体任务未成功"
-		}
-	}
-	runes := []rune(detail)
-	if len(runes) > 240 {
-		detail = string(runes[:240]) + "…"
-	}
-	return detail
+	// 与画布节点展示同一套分类：网络/审核/存储/HTTP 状态归类，可读的供应商原因原样保留。
+	return userFacingTaskError(task.Error)
 }
 
 func cloudAgentToolResult(runID string, state *cloudAgentRuntime, call cloudAgentCall, result any, err error) bool {
@@ -2313,9 +2453,10 @@ func (s *Service) DecideCloudAgentApproval(userID, id, approvalID, decision, rea
 	if run.Status != "waiting_approval" || state.Approval == nil || state.Approval.ID != approvalID {
 		return creationConflict("审批不存在或已过期")
 	}
+	// 只在记录审批决定的这次写入期间持锁：随后的工具执行（advanceCloudAgentTool）
+	// 会自己获取 storageMu，持锁到函数返回会造成自锁。
 	s.storageMu.Lock()
-	defer s.storageMu.Unlock()
-	return s.repo.MutateCloudAgent(userID, id, run.Revision, func(current *model.CloudAgentExecution, repo *repository.Repository) error {
+	err = s.repo.MutateCloudAgent(userID, id, run.Revision, func(current *model.CloudAgentExecution, repo *repository.Repository) error {
 		if settings != nil {
 			if err := s.updateCloudAgentMediaApproval(repo, run, &state, *settings); err != nil {
 				return err
@@ -2364,8 +2505,92 @@ func (s *Service) DecideCloudAgentApproval(userID, id, approvalID, decision, rea
 		state.event(id, "approval_decided", payload)
 		return cloudAgentSave(current, &state)
 	})
+	s.storageMu.Unlock()
+	if err != nil || decision != "approve" {
+		return err
+	}
+	// Approval only releases the paused tool. Execute it once in the Go business
+	// executor, then give the durable result back to Pi; Go never asks a model
+	// what to do next.
+	latest, err := s.repo.CloudAgent(userID, id)
+	if err != nil {
+		return err
+	}
+	state, err = cloudAgentDecode(latest)
+	if err != nil {
+		return err
+	}
+	if err = s.advanceCloudAgentTool(latest, &state); err != nil {
+		return err
+	}
+	if state.MediaTaskID == "" {
+		return s.resumeCloudAgentAfterApproval(userID, id, &state)
+	}
+	// 媒体生成可能要几分钟：审批请求立即返回，等待与回写在后台完成后再恢复运行。
+	mediaTaskID := state.MediaTaskID
+	s.startApprovedCloudAgentMediaWaiter(userID, id, mediaTaskID)
+	return nil
+}
+
+func (s *Service) finishApprovedCloudAgentMedia(ctx context.Context, userID, id, mediaTaskID string) error {
+	mediaTask, err := s.waitCloudAgentTask(ctx, mediaTaskID)
+	if mediaTask == nil {
+		// 失败的任务也要回写（记录工具失败并释放 MediaTaskID）；只有读不到任务才中止。
+		if mediaTask, err = s.repo.Task(mediaTaskID); err != nil {
+			return err
+		}
+	}
+	if err = s.settleCloudAgentMedia(userID, id); err != nil {
+		return err
+	}
+	latest, err := s.repo.CloudAgent(userID, id)
+	if err != nil {
+		return err
+	}
+	state, err := cloudAgentDecode(latest)
+	if err != nil {
+		return err
+	}
+	if mediaTask.Status != model.TaskStatusSucceeded {
+		state.PiResumePrompt = "用户已批准该操作，但媒体任务未成功完成。请根据工具结果告知用户，不要重复提交该操作。"
+	}
+	return s.resumeCloudAgentAfterApproval(userID, id, &state)
+}
+
+func (s *Service) resumeCloudAgentAfterApproval(userID, id string, state *cloudAgentRuntime) error {
+	if state.PiResumePrompt == "" {
+		state.PiResumePrompt = "用户已批准刚才等待审批的操作。业务执行器已执行一次；请根据最新工具结果继续，不要重复调用该操作。"
+	}
+	if err := s.saveCloudAgentPiResumePrompt(userID, id, state.PiResumePrompt); err != nil {
+		return err
+	}
+	s.startCloudAgentPi(userID, id)
+	return nil
+}
+
+// saveCloudAgentPiResumePrompt 只合并恢复提示词，不覆盖其它并发写入的字段。
+func (s *Service) saveCloudAgentPiResumePrompt(userID, id, prompt string) error {
+	for attempt := 0; attempt < 8; attempt++ {
+		run, err := s.repo.CloudAgent(userID, id)
+		if err != nil {
+			return err
+		}
+		err = s.repo.MutateCloudAgent(userID, id, run.Revision, func(current *model.CloudAgentExecution, _ *repository.Repository) error {
+			fresh, err := cloudAgentDecode(current)
+			if err != nil {
+				return err
+			}
+			fresh.PiResumePrompt = prompt
+			return cloudAgentSave(current, &fresh)
+		})
+		if !errors.Is(err, repository.ErrCreationConflict) {
+			return err
+		}
+	}
+	return repository.ErrCreationConflict
 }
 func (s *Service) CancelCloudAgent(ctx context.Context, userID, id string) error {
+	s.stopCloudAgentPi(id)
 	// Cancellation is a control-plane operation. It must remain available even
 	// when the user-facing runtime blob is damaged, so authenticate/authorize
 	// from the task row first instead of calling CloudAgentRun up front.
@@ -2394,7 +2619,17 @@ func (s *Service) CancelCloudAgent(ctx context.Context, userID, id string) error
 	if run.Status == "completed" || (run.Status == "failed" && !run.CleanupPending) {
 		return nil
 	}
-	if run.Status != "failed" {
+	// 取消是用户操作，不能因为运行时正在并发写事件就失败：冲突时重读最新 revision 重试。
+	for attempt := 0; run.Status != "failed" && attempt < 8; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 20 * time.Millisecond)
+			if run, err = s.repo.CloudAgent(userID, id); err != nil {
+				return err
+			}
+			if run.Status == "completed" || (run.Status == "failed" && !run.CleanupPending) {
+				return nil
+			}
+		}
 		// Persist intent independently of the transcript. Retrying also repairs
 		// legacy cancelled rows that crashed before cancelling their children.
 		state, decodeErr := cloudAgentDecode(run)
@@ -2416,9 +2651,16 @@ func (s *Service) CancelCloudAgent(ctx context.Context, userID, id string) error
 			}
 			return nil
 		})
+		if errors.Is(err, repository.ErrCreationConflict) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
+		break
+	}
+	if errors.Is(err, repository.ErrCreationConflict) {
+		return err
 	}
 	latest, err := s.repo.CloudAgent(userID, id)
 	if err != nil {
