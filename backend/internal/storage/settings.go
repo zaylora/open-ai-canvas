@@ -31,11 +31,20 @@ type Settings struct {
 	SessionToken      string           `json:"sessionToken"`
 	StorageLocationID string           `json:"storageLocationId"`
 	AllowUserS3       bool             `json:"allowUserS3"`
+	Runtime           RuntimePolicy    `json:"-"`
 	// ImageTransform 开启浏览器读取图片时的缩放变体交付，当前只由 Cloudflare Images 实现，
 	// 因此仅在 R2 + Cloudflare 代理域名下成立；NormalizeSettings 负责强制这个前提。
 	ImageTransform bool `json:"imageTransform"`
 	// 平台切换云厂商后仍需读取历史资源，因此仅归档非当前厂商的访问密钥。
 	ArchivedCredentials map[string]Credentials `json:"archivedCredentials,omitempty"`
+}
+
+type RuntimePolicy struct {
+	TransferTimeout       time.Duration
+	AccessURLTTL          time.Duration
+	ProviderAccessURLTTL  time.Duration
+	MaxBufferedUploadSize int64
+	ErrorBodyLimit        int64
 }
 
 type Credentials struct {
@@ -83,6 +92,21 @@ func NormalizeSettings(value Settings) Settings {
 	}
 	value.SessionToken = strings.TrimSpace(value.SessionToken)
 	value.StorageLocationID = strings.TrimSpace(value.StorageLocationID)
+	if value.Runtime.TransferTimeout <= 0 {
+		value.Runtime.TransferTimeout = 2 * time.Minute
+	}
+	if value.Runtime.AccessURLTTL <= 0 {
+		value.Runtime.AccessURLTTL = resourceAccessURLTTL
+	}
+	if value.Runtime.ProviderAccessURLTTL <= 0 {
+		value.Runtime.ProviderAccessURLTTL = 4 * time.Hour
+	}
+	if value.Runtime.MaxBufferedUploadSize <= 0 {
+		value.Runtime.MaxBufferedUploadSize = 64 << 20
+	}
+	if value.Runtime.ErrorBodyLimit <= 0 {
+		value.Runtime.ErrorBodyLimit = 1024
+	}
 	value.ArchivedCredentials = CloneCredentials(value.ArchivedCredentials)
 	if !SupportsImageTransform(value) {
 		value.ImageTransform = false

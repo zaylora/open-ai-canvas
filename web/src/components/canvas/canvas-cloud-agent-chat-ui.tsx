@@ -1,7 +1,7 @@
 import { agentCanvasActions, agentCanvasActionLabel } from "@/lib/canvas/agent-canvas-actions";
 import { Button } from "antd";
 import { Tooltip } from "@/components/ui/base/tooltip";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SyntheticEvent } from "react";
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -61,12 +61,35 @@ type CloudAgentOperationImpact = {
     warning?: string;
 };
 export type CloudAgentPlanItem = { id: string; title: string; status: "pending" | "doing" | "done" };
+export type CloudAgentFormOption = { id?: string; label: string; detail?: string; recommended?: boolean };
+export type CloudAgentFormField = {
+    id: string;
+    title: string;
+    type: "single_select" | "segmented" | "text" | "textarea" | "model_picker";
+    options?: CloudAgentFormOption[];
+    defaultValue?: string;
+    required?: boolean;
+    allowCustom?: boolean;
+    placeholder?: string;
+};
 export type CloudAgentUserQuestion = {
     question: string;
     options: Array<{ label: string; detail?: string }>;
+    fields?: CloudAgentFormField[];
+    kind?: "choice" | "form";
+    questionId?: string;
     allowFreeform?: boolean;
     round?: number;
     maxRounds?: number;
+};
+export type CloudAgentFormAnswer = {
+    type: "form_answer";
+    questionId?: string;
+    answers: Record<string, string>;
+    displayAnswers?: Record<string, string>;
+    fieldTitles?: Record<string, string>;
+    skippedFields?: string[];
+    useRecommendedDefaults?: boolean;
 };
 export type CloudAgentChatMessage = {
     id: string;
@@ -86,6 +109,7 @@ export type CloudAgentChatMessage = {
     /** 运行已进入终态，但计划项仍未全部完成；用于历史恢复时停止显示 loading。 */
     planTerminal?: boolean;
     question?: CloudAgentUserQuestion;
+    formAnswer?: CloudAgentFormAnswer;
     meta?: string;
     detail?: unknown;
     attachments?: CloudAgentChatAttachment[];
@@ -106,6 +130,80 @@ export function agentAssistantFinality(payload: Record<string, unknown>): boolea
  */
 export function agentControlMessage(id: string, text: string, meta?: string): CloudAgentChatMessage {
     return { id, role: "system", text, meta };
+}
+
+const AGENT_FORM_FIELD_LABELS: Record<string, string> = {
+    genre: "题材",
+    aspectRatio: "画幅",
+    style: "画风",
+    visualStyle: "画风",
+    comedyStyle: "喜剧风格",
+    projectType: "项目类型",
+    model: "模型",
+    notes: "补充说明",
+};
+
+const AGENT_FORM_VALUE_LABELS: Record<string, string> = {
+    costume_time_travel: "古装穿越",
+    absurd: "荒诞",
+};
+
+function formAnswerRecord(value: unknown): Record<string, string> | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const entries = Object.entries(value).filter(([, item]) => typeof item === "string" && item.trim());
+    return entries.length ? Object.fromEntries(entries.map(([key, item]) => [key, String(item)])) : undefined;
+}
+
+export function parseCloudAgentFormAnswer(value: string): CloudAgentFormAnswer | undefined {
+    try {
+        const parsed: unknown = JSON.parse(value);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || (parsed as { type?: unknown }).type !== "form_answer") return undefined;
+        const record = parsed as Record<string, unknown>;
+        if (!record.answers || typeof record.answers !== "object" || Array.isArray(record.answers)) return undefined;
+        const answers = formAnswerRecord(record.answers) || {};
+        return {
+            type: "form_answer",
+            questionId: typeof record.questionId === "string" ? record.questionId : undefined,
+            answers,
+            displayAnswers: formAnswerRecord(record.displayAnswers),
+            fieldTitles: formAnswerRecord(record.fieldTitles),
+            skippedFields: Array.isArray(record.skippedFields) ? record.skippedFields.filter((item): item is string => typeof item === "string") : [],
+            useRecommendedDefaults: record.useRecommendedDefaults === true,
+        };
+    } catch {
+        return undefined;
+    }
+}
+
+function agentFormFieldLabel(key: string, fieldTitles?: Record<string, string>) {
+    return fieldTitles?.[key] || AGENT_FORM_FIELD_LABELS[key] || key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ");
+}
+
+function agentFormValueLabel(value: string) {
+    return AGENT_FORM_VALUE_LABELS[value] || value.replace(/_/g, " ");
+}
+
+function AgentFormAnswerCard({ answer, theme }: { answer: CloudAgentFormAnswer; theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
+    const values = answer.displayAnswers && Object.keys(answer.displayAnswers).length ? answer.displayAnswers : answer.answers;
+    const entries = Object.entries(values).filter(([, value]) => value.trim());
+    return (
+        <div className="agent-form-answer-card" style={{ color: theme.node.text }}>
+            <div className="agent-form-answer-heading">已确认创作方向</div>
+            {answer.useRecommendedDefaults ? <div className="agent-form-answer-note">已采用推荐方案</div> : null}
+            {entries.length ? (
+                <div className="agent-form-answer-list">
+                    {entries.map(([key, value]) => (
+                        <div className="agent-form-answer-row" key={key}>
+                            <span className="agent-form-answer-label">{agentFormFieldLabel(key, answer.fieldTitles)}</span>
+                            <span className="agent-form-answer-value">{answer.displayAnswers?.[key] || agentFormValueLabel(value)}</span>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <div className="agent-form-answer-note">已确认，按推荐方案继续</div>
+            )}
+        </div>
+    );
 }
 
 /**
@@ -314,6 +412,7 @@ export function AgentChatMessage({
     const isUser = item.role === "user";
     const isSystem = item.role === "system";
     const displayedText = useTypewriterText(item.text, item.role === "assistant" && isStreaming);
+    const formAnswer = item.formAnswer ?? (isUser ? parseCloudAgentFormAnswer(item.text) : undefined);
     const markdownComponents = useMemo(() => createAgentMessageMarkdownComponents(references, onFocusNode), [onFocusNode, references]);
     const agentMarkdownText = rewriteAgentNodeLinks(displayedText, references);
     const errorTone = item.errorSeverity === "warning" ? "warning" : "error";
@@ -385,6 +484,8 @@ export function AgentChatMessage({
                     <AIMessageMarkdown className="text-left" isStreaming={isStreaming} streamingAnimation="none" components={markdownComponents}>
                         {agentMarkdownText}
                     </AIMessageMarkdown>
+                ) : formAnswer ? (
+                    <AgentFormAnswerCard answer={formAnswer} theme={theme} />
                 ) : (
                     <AgentMessageText text={item.text} references={references} />
                 )}
@@ -943,7 +1044,169 @@ export function AgentPlanBar({ items, theme, minimized, onToggle, terminal = fal
     );
 }
 
-export function AgentQuestionBar({ question, theme, onAnswer, disabled = false }: { question: CloudAgentUserQuestion; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onAnswer: (label: string) => void; disabled?: boolean }) {
+export function AgentQuestionBar({ question, theme, onAnswer, disabled = false }: { question: CloudAgentUserQuestion; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onAnswer: (answer: string) => void; disabled?: boolean }) {
+    const fields = question.fields || [];
+    const isForm = question.kind === "form" || fields.length > 0;
+    const fieldDefaultValue = (field: CloudAgentFormField) => field.defaultValue || field.options?.find((option) => option.recommended)?.id || field.options?.find((option) => option.recommended)?.label || "";
+    const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(fields.map((field) => [field.id, fieldDefaultValue(field)])));
+    const [customFields, setCustomFields] = useState<Record<string, boolean>>({});
+    const [validation, setValidation] = useState("");
+
+    useEffect(() => {
+        setValues(Object.fromEntries(fields.map((field) => [field.id, fieldDefaultValue(field)])));
+        setCustomFields({});
+        setValidation("");
+    }, [question.questionId, fields]);
+
+    const submitForm = (useDefaults = false) => {
+        const answers = useDefaults ? Object.fromEntries(fields.map((field) => [field.id, field.defaultValue || ""])) : values;
+        const missing = fields.find((field) => (field.required && !String(answers[field.id] || "").trim()) || (field.required && answers[field.id] === "other"));
+        if (missing) {
+            setValidation(`请填写“${missing.title}”`);
+            return;
+        }
+        setValidation("");
+        const displayAnswers: Record<string, string> = {};
+        for (const field of fields) {
+            const value = String(answers[field.id] || "").trim();
+            if (!value || value === "other") continue;
+            const option = field.options?.find((item) => (item.id || item.label) === value);
+            displayAnswers[field.id] = option?.label || value;
+        }
+        const fieldTitles = Object.fromEntries(fields.map((field) => [field.id, field.title]));
+        onAnswer(JSON.stringify({ type: "form_answer", questionId: question.questionId, answers, displayAnswers, fieldTitles, skippedFields: fields.filter((field) => !String(answers[field.id] || "").trim()).map((field) => field.id), useRecommendedDefaults: useDefaults }));
+    };
+
+    const stop = (event: SyntheticEvent) => {
+        event.stopPropagation();
+    };
+    const updateValue = (field: CloudAgentFormField, value: string) => {
+        setValues((current) => ({ ...current, [field.id]: value }));
+        if (field.allowCustom && value === "other") setCustomFields((current) => ({ ...current, [field.id]: true }));
+    };
+
+    if (isForm) {
+        return (
+            <div className="agent-question-bar agent-question-form mx-3 mb-2 overflow-hidden rounded-xl" style={{ color: theme.node.text }}>
+                <div className="flex items-start gap-2 px-3 pt-2.5">
+                    <HelpCircle className="mt-[1px] size-3.5 shrink-0" style={{ color: theme.accent.primary }} />
+                    <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 text-[10px] opacity-55">{question.round && question.maxRounds ? `确认 ${question.round}/${question.maxRounds}` : "需求确认"}</div>
+                        <div className="text-xs font-semibold leading-5">{question.question}</div>
+                        <div className="mt-0.5 text-[10px] opacity-50">已填入推荐值，可按需修改；不重要的字段可以留空。</div>
+                    </div>
+                </div>
+                <div className="agent-question-fields px-3 py-2">
+                    {fields.map((field) => {
+                        const options = field.options || [];
+                        const custom = customFields[field.id] || values[field.id] === "other";
+                        return (
+                            <div className="agent-question-field" key={field.id}>
+                                <label className="agent-question-field-label" htmlFor={`agent-field-${field.id}`}>
+                                    {field.title}
+                                    {field.required ? <span className="ml-0.5 opacity-70">*</span> : null}
+                                </label>
+                                <div className="min-w-0 flex-1">
+                                    {field.type === "textarea" ? (
+                                        <textarea
+                                            id={`agent-field-${field.id}`}
+                                            rows={2}
+                                            value={values[field.id] || ""}
+                                            placeholder={field.placeholder}
+                                            disabled={disabled}
+                                            className="agent-question-input agent-question-textarea"
+                                            onChange={(event) => updateValue(field, event.target.value)}
+                                            onMouseDown={stop}
+                                            onPointerDown={stop}
+                                        />
+                                    ) : field.type === "text" ? (
+                                        <input
+                                            id={`agent-field-${field.id}`}
+                                            value={values[field.id] || ""}
+                                            placeholder={field.placeholder}
+                                            disabled={disabled}
+                                            className="agent-question-input"
+                                            onChange={(event) => updateValue(field, event.target.value)}
+                                            onMouseDown={stop}
+                                            onPointerDown={stop}
+                                        />
+                                    ) : (
+                                        <div className="agent-question-options" role="radiogroup" aria-label={field.title}>
+                                            {options.map((option) => {
+                                                const optionId = option.id || option.label;
+                                                const selected = values[field.id] === optionId;
+                                                return (
+                                                    <button
+                                                        key={optionId}
+                                                        type="button"
+                                                        disabled={disabled}
+                                                        aria-pressed={selected}
+                                                        className={`agent-question-chip${selected ? " is-selected" : ""}`}
+                                                        style={selected ? { background: theme.accent.primary, color: theme.accent.onPrimary } : { background: theme.toolbar.itemHover }}
+                                                        title={option.detail || option.label}
+                                                        onMouseDown={stop}
+                                                        onPointerDown={stop}
+                                                        onClick={(event) => {
+                                                            stop(event);
+                                                            updateValue(field, optionId);
+                                                        }}
+                                                    >
+                                                        {option.label}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                    {field.allowCustom && (custom || field.type === "text") ? (
+                                        <input
+                                            value={custom && values[field.id] !== "other" ? values[field.id] || "" : ""}
+                                            placeholder={field.placeholder || "输入自定义内容"}
+                                            disabled={disabled}
+                                            className="agent-question-input mt-1.5"
+                                            onChange={(event) => updateValue(field, event.target.value)}
+                                            onMouseDown={stop}
+                                            onPointerDown={stop}
+                                        />
+                                    ) : null}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+                {validation ? <div className="agent-question-validation px-3 pb-1 text-[10px]">{validation}</div> : null}
+                <div className="agent-question-actions px-3 pb-2.5">
+                    <button
+                        type="button"
+                        disabled={disabled}
+                        className="agent-question-default"
+                        onMouseDown={stop}
+                        onPointerDown={stop}
+                        onClick={(event) => {
+                            stop(event);
+                            submitForm(true);
+                        }}
+                    >
+                        按推荐方案开始
+                    </button>
+                    <button
+                        type="button"
+                        disabled={disabled}
+                        className="agent-question-submit"
+                        style={{ background: theme.accent.primary, color: theme.accent.onPrimary }}
+                        onMouseDown={stop}
+                        onPointerDown={stop}
+                        onClick={(event) => {
+                            stop(event);
+                            submitForm();
+                        }}
+                    >
+                        确认并继续
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="agent-question-bar mx-3 mb-2 overflow-hidden rounded-xl" style={{ color: theme.node.text }}>
             <div className="flex items-start gap-2 px-3 pt-2.5">
@@ -960,12 +1223,12 @@ export function AgentQuestionBar({ question, theme, onAnswer, disabled = false }
                         type="button"
                         disabled={disabled}
                         title={option.detail || option.label}
-                        className="max-w-full rounded-md border-0 px-3 py-1.5 text-left text-xs transition focus-visible:outline focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="agent-question-choice max-w-full rounded-md border-0 px-3 py-1.5 text-left text-xs transition focus-visible:outline focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50"
                         style={{ background: theme.toolbar.itemHover }}
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onPointerDown={(event) => event.stopPropagation()}
+                        onMouseDown={stop}
+                        onPointerDown={stop}
                         onClick={(event) => {
-                            event.stopPropagation();
+                            stop(event);
                             onAnswer(option.label);
                         }}
                     >
@@ -977,23 +1240,22 @@ export function AgentQuestionBar({ question, theme, onAnswer, disabled = false }
                     type="button"
                     disabled={disabled}
                     title="使用安全默认方案继续"
-                    className="max-w-full rounded-md border-0 px-3 py-1.5 text-left text-xs font-medium transition focus-visible:outline focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="agent-question-default max-w-full rounded-md border-0 px-3 py-1.5 text-left text-xs font-medium transition focus-visible:outline focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50"
                     style={{ background: theme.accent.primary, color: theme.accent.onPrimary }}
-                    onMouseDown={(event) => event.stopPropagation()}
-                    onPointerDown={(event) => event.stopPropagation()}
+                    onMouseDown={stop}
+                    onPointerDown={stop}
                     onClick={(event) => {
-                        event.stopPropagation();
+                        stop(event);
                         onAnswer("直接开始");
                     }}
                 >
                     按默认方案开始
                 </button>
             </div>
-            <div className="px-3 pb-2 text-[10px] opacity-50">{question.allowFreeform === false ? "请从上面选一项。" : "点一项即可，也可以在下方输入框里自己说明。"}</div>
+            <div className="px-3 pb-2 text-[10px] opacity-50">{question.allowFreeform === false ? "请从上面选一项。" : "也可以在下方输入框里补充说明。"}</div>
         </div>
     );
 }
-
 /**
  * 场景起步胶囊：把「我大概想做 X」一步翻译成一组技能。
  * 两组来源，都不限剧典技能：
