@@ -1,6 +1,12 @@
 ﻿# CHANGELOG
 
-## v1.5.8-zaylora.4
+## v1.5.8-zaylora.7
+
+- 修复上游合并后前后端构建问题：恢复存储运行时策略字段，并同步 Agent 表单问答 UI 与解析逻辑。
+- 修复资源交付路由的图片预览宽度参数接入。
+- 验证：前端 TypeScript、后端 storage/handler/app 编译测试及 `git diff --check` 通过。
+
+## v1.5.8-zaylora.6
 
 - 合并上游 `ddcat-ai/open-ai-canvas` main，吸收 Cloud Agent、画布历史与资源访问等更新；保留本仓库既有图片变体与性能优化实现。
 - 解决上游合并产生的 10 个冲突文件，统一采用已验证的 fork 侧资源访问、画布性能与上下文计量实现。
